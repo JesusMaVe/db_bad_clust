@@ -1,0 +1,22 @@
+version: "3.8"
+services:
+  oracle:
+    image: gvenzl/oracle-free:23-slim  # Imagen ligera y suficiente
+    container_name: bad_db_trainer
+    ports:
+      - "1521:1521"
+    environment:
+      ORACLE_PASSWORD: "UnaContraseñaSegura2024"
+      APP_USER: "bad_schema"            # Usuario dueño de las tablas "malas"
+      APP_USER_PASSWORD: "bad_schema_pass"
+    volumes:
+      - oracle_data:/opt/oracle/oradata # Persistencia de datos
+      - ./sql_init:/container-entrypoint-initdb.d:ro  # Scripts de inicio
+    healthcheck:
+      test: ["CMD", "healthcheck.sh"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  oracle_data:

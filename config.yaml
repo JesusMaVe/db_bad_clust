@@ -1,0 +1,13 @@
+database:
+  user: "bad_schema"          # Usuario APP_USER que configuraste
+  password: "bad_schema_pass" # Contraseña del APP_USER
+  dsn: "localhost:1521/FREEPDB1"  # Service name por defecto
+
+project:
+  name: "ml_bad_db_trainer"
+  version: "1.0.0"
+  
+anti_patterns:
+  tables_count: 10          # Número de tablas a generar
+  rows_per_table_min: 5     # Mínimo de filas por tabla
+  rows_per_table_max: 20    # Máximo de filas por tabla
