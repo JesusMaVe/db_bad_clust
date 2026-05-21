@@ -1,5 +1,9 @@
 oracledb>=2.0.0
 pyyaml>=6.0
 python-dotenv>=1.0.0
-sqlalchemy>=2.0.0  # Opcional pero útil para abstracción
-pandas>=2.0.0      # Para manipulación de datos futura
+sqlalchemy>=2.0.0
+pandas>=2.0.0
+transformers>=4.30.0
+torch>=2.0.0
+numpy>=1.24.0
+scikit-learn>=1.3.0
