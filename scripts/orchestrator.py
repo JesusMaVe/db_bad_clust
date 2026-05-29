@@ -4,6 +4,7 @@ from pathlib import Path
 # Agregamos el directorio actual al path
 sys.path.insert(0, str(Path(__file__).parent))
 
+import oracledb
 from db_connector import OracleConnector
 from ddl_generator import DDLGenerator
 from dml_generator import DMLGenerator
