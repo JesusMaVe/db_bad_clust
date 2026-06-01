@@ -153,25 +153,25 @@ Las 235 columnas permiten NULL. No hay campos obligatorios.
 
 ```
 db_bad_clust/
-├── scripts/                    # Codigo fuente (Phase 1 + Phase 2/3)
-│   ├── orchestrator.py         # Entrypoint Phase 1 (generar Oracle)
-│   ├── phase2_orchestrator.py  # Entrypoint Phase 2/3 (ML pipeline)
-│   ├── anti_patterns.py        # Definiciones de tablas mal disenadas
-│   ├── cluster_engine.py       # 5 algoritmos de clustering
-│   ├── dimensionality_reducer.py # 4 metodos de reduccion
-│   ├── evaluator.py            # Metricas + validacion + anomalias
-│   ├── ground_truth.py         # Ground truth automatico
-│   ├── exceptions.py           # Jerarquia de excepciones (9 clases)
-│   └── ...                     # Modulos restantes
-├── tests/                      # 364 tests (sin DB, con mocks)
-├── dashboard/                  # Dashboard web HTML
-├── output/                     # Resultados de ejecuciones (gitignored)
-├── docs/
-│   ├── context.md              # Diseno teorico original
-│   ├── implementation.md       # Este documento
-│   ├── phase2/                 # Documentacion por modulo
-│   └── phase3/                 # Diseno de validacion + reporte final
-└── README.md                   # Instrucciones de uso
++-- scripts/                    # Codigo fuente (Phase 1 + Phase 2/3)
+|   +-- orchestrator.py         # Entrypoint Phase 1 (generar Oracle)
+|   +-- phase2_orchestrator.py  # Entrypoint Phase 2/3 (ML pipeline)
+|   +-- anti_patterns.py        # Definiciones de tablas mal disenadas
+|   +-- cluster_engine.py       # 5 algoritmos de clustering
+|   +-- dimensionality_reducer.py # 4 metodos de reduccion
+|   +-- evaluator.py            # Metricas + validacion + anomalias
+|   +-- ground_truth.py         # Ground truth automatico
+|   +-- exceptions.py           # Jerarquia de excepciones (9 clases)
+|   +-- ...                     # Modulos restantes
++-- tests/                      # 364 tests (sin DB, con mocks)
++-- dashboard/                  # Dashboard web HTML
++-- output/                     # Resultados de ejecuciones (gitignored)
++-- docs/
+|   +-- context.md              # Diseno teorico original
+|   +-- implementation.md       # Este documento
+|   +-- phase2/                 # Documentacion por modulo
+|   +-- phase3/                 # Diseno de validacion + reporte final
++-- README.md                   # Instrucciones de uso
 ```
 
 ---
