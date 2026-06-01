@@ -1,19 +1,19 @@
-# Módulo 2: Text Preprocessor
+# Modulo 2: Text Preprocessor
 
-## Propósito
+## Proposito
 
-Transforma nombres técnicos de columnas (camelCase, snake_case, UPPER_CASE)
-en texto limpio y semánticamente enriquecido para alimentar BERT.
+Transforma nombres tecnicos de columnas (camelCase, snake_case, UPPER_CASE)
+en texto limpio y semanticamente enriquecido para alimentar BERT.
 
-## Ubicación
+## Ubicacion
 
 `scripts/text_preprocessor.py`
 
 ## Pipeline
 
 ```
-Nombre original → Split camelCase → Split _ → Remove prefixes
-→ Expand abbreviations → Lowercase → Contextualize → Salida
+Nombre original -> Split camelCase -> Split _ -> Remove prefixes
+-> Expand abbreviations -> Lowercase -> Contextualize -> Salida
 ```
 
 ## Ejemplos
@@ -41,13 +41,13 @@ text = prep.process("FECHA_NACIMIENTO", table_name="EMPLEADOS")
 # Batch
 texts = prep.process_batch(["ID", "NOMBRE"], table_name="EMPLEADOS")
 
-# Función directa
+# Funcion directa
 text = preprocess("isActive", "USERS")
 ```
 
 ## Abreviaturas Soportadas (parcial)
 
-| Abreviatura | Expansión          |
+| Abreviatura | Expansion          |
 |-------------|--------------------|
 | id          | identifier         |
 | pk          | primary key        |
@@ -66,7 +66,7 @@ text = preprocess("isActive", "USERS")
 
 ## Notas
 
-- Diseñado para `bert-base-multilingual-cased` — preserva palabras en español.
-- Los nombres crípticos como `C1`, `C2` se mantienen (son anti-patrones válidos).
+- Disenyado para `bert-base-multilingual-cased`  preserva palabras en espanyol.
+- Los nombres cripticos como `C1`, `C2` se mantienen (son anti-patrones validos).
 - El contexto de tabla se antepone con `": "` para que BERT diferencie
   columnas con el mismo nombre en tablas distintas.

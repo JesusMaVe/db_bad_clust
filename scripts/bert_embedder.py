@@ -1,31 +1,41 @@
 """
-bert_embedder.py — Generación de embeddings BERT para atributos de BD
+bert_embedder.py — BERT embedding generation for database column names.
 
-Propósito:
-  Genera vectores densos ℝ⁷⁶⁸ para cada atributo (columna) usando
-  bert-base-multilingual-cased de Hugging Face.
+Generates dense ℝ⁷⁶⁸ vectors for each column using
+bert-base-multilingual-cased from Hugging Face. Takes preprocessed
+text (via TextPreprocessor) and extracts the [CLS] token from the
+last hidden layer.
 
-  Toma el texto preprocesado por TextPreprocessor y extrae el vector
-  del token [CLS] de la última capa como representación semántica.
-
-Uso:
-  embedder = BERTEmbedder()
-  vectors = embedder.encode(["empleados: fecha nacimiento", ...])
-  # → numpy array shape (N, 768)
+Usage:
+    embedder = BERTEmbedder()
+    vectors = embedder.encode(["employees: date of birth", ...])
+    # → numpy array shape (N, 768)
 """
 
+from __future__ import annotations
+
+import gc
 import logging
+from typing import TYPE_CHECKING
+
 import numpy as np
-from typing import List, Optional
+from exceptions import EmbeddingError
+
+if TYPE_CHECKING:
+    from transformers import AutoModel, AutoTokenizer
 
 logger = logging.getLogger(__name__)
 
 
 class BERTEmbedder:
-    """
-    Genera embeddings BERT para textos de atributos de base de datos.
+    """Generates BERT embeddings for database attribute texts.
 
-    Cachea el modelo en memoria para evitar recargar en llamadas sucesivas.
+    Caches the model in memory to avoid reloading on successive calls.
+
+    Args:
+        model_name: Hugging Face model identifier.
+        device: "auto" (CPU/MPS/CUDA), "cpu", "cuda", or "mps".
+        max_length: Maximum token count per text (short names → 32).
     """
 
     def __init__(
@@ -33,80 +43,81 @@ class BERTEmbedder:
         model_name: str = "bert-base-multilingual-cased",
         device: str = "auto",
         max_length: int = 32,
-    ):
-        """
-        Args:
-            model_name: Nombre del modelo Hugging Face.
-            device: "auto" (CPU/MPS/CUDA), "cpu", "cuda", o "mps".
-            max_length: Máximo de tokens por texto (nombres cortos → 32).
-        """
+    ) -> None:
         self.model_name = model_name
         self.max_length = max_length
-        self._model = None
-        self._tokenizer = None
-        self._device = self._resolve_device(device)
+        self._model: AutoModel | None = None
+        self._tokenizer: AutoTokenizer | None = None
+        self._device: str = self._resolve_device(device)
 
-    # ── Inicialización lazy del modelo ────────────────────────────────
+    # ── Lazy model initialisation ────────────────────────────────────
 
     @staticmethod
     def _resolve_device(device: str) -> str:
-        """Determina el dispositivo óptimo."""
+        """Determine the optimal compute device.
+
+        Returns:
+            Device string: "cuda", "mps", or "cpu".
+        """
         if device != "auto":
             return device
         try:
-            import torch
-            if torch.cuda.is_available():
+            import torch as _
+
+            if _.cuda.is_available():
                 return "cuda"
-            elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            if hasattr(_.backends, "mps") and _.backends.mps.is_available():
                 return "mps"
         except ImportError:
             pass
         return "cpu"
 
-    def _load_model(self):
-        """Carga el modelo y tokenizer (una sola vez)."""
+    def _load_model(self) -> None:
+        """Load the model and tokenizer once (idempotent)."""
         if self._model is not None:
             return
 
         try:
-            from transformers import AutoTokenizer, AutoModel
-        except ImportError:
-            raise ImportError(
-                "Se necesita 'transformers' y 'torch': pip install transformers torch"
-            )
+            from transformers import AutoModel, AutoTokenizer  # type: ignore[import-untyped]
+        except ImportError as e:
+            raise EmbeddingError(
+                "Missing optional dependencies: pip install transformers torch"
+            ) from e
 
-        logger.info(
-            "Cargando modelo BERT: %s (device=%s)", self.model_name, self._device
-        )
+        logger.info("Loading BERT model: %s (device=%s)", self.model_name, self._device)
         self._tokenizer = AutoTokenizer.from_pretrained(self.model_name)
         self._model = AutoModel.from_pretrained(self.model_name)
         self._model.eval()
 
         try:
-            import torch
+            import torch as _  # noqa: F401 — verify availability
+
             self._model.to(self._device)
-        except Exception:
+        except (ImportError, RuntimeError, ValueError):
             self._device = "cpu"
 
-        logger.info("Modelo BERT cargado (dim=%d)", self._model.config.hidden_size)
+        logger.info("BERT model loaded (dim=%d)", self._model.config.hidden_size)
 
     @property
     def embedding_dim(self) -> int:
-        """Dimensión del embedding (768 para bert-base)."""
+        """Return the embedding dimension (768 for bert-base)."""
         self._load_model()
-        return self._model.config.hidden_size
+        return int(self._model.config.hidden_size)
 
     # ── Encoding ──────────────────────────────────────────────────────
 
-    def encode(self, texts: List[str]) -> np.ndarray:
-        """
-        Genera embeddings para una lista de textos.
+    def encode(self, texts: list[str]) -> np.ndarray:
+        """Generate embeddings for a list of preprocessed texts.
 
         Args:
-            texts: Lista de strings preprocesados.
+            texts: List of preprocessed column-name strings.
 
         Returns:
-            numpy array shape (len(texts), embedding_dim).
+            numpy array of shape (len(texts), embedding_dim).
+
+        Raises:
+            EmbeddingError: If torch / transformers are missing or the
+                model fails to produce embeddings.
         """
         if not texts:
             return np.array([], dtype=np.float32).reshape(0, 0)
@@ -115,46 +126,47 @@ class BERTEmbedder:
 
         try:
             import torch
-        except ImportError:
-            raise ImportError("Se necesita 'torch' para ejecutar el modelo BERT")
+        except ImportError as e:
+            raise EmbeddingError("torch is required for BERT inference") from e
 
-        inputs = self._tokenizer(
-            texts,
-            padding=True,
-            truncation=True,
-            max_length=self.max_length,
-            return_tensors="pt",
-        )
+        try:
+            inputs = self._tokenizer(  # type: ignore[misc]
+                texts,
+                padding=True,
+                truncation=True,
+                max_length=self.max_length,
+                return_tensors="pt",
+            )
 
-        with torch.no_grad():
-            inputs = {k: v.to(self._device) for k, v in inputs.items()}
-            outputs = self._model(**inputs)
-            # Usar el vector [CLS] (primer token) de la última capa
-            cls_vectors = outputs.last_hidden_state[:, 0, :].cpu().numpy()
+            with torch.no_grad():
+                inputs = {k: v.to(self._device) for k, v in inputs.items()}
+                outputs = self._model(**inputs)  # type: ignore[misc]
+                cls_vectors = outputs.last_hidden_state[:, 0, :].cpu().numpy()
 
-        return cls_vectors.astype(np.float32)
+            return cls_vectors.astype(np.float32)
+        except Exception as e:
+            raise EmbeddingError(f"BERT encoding failed: {e}") from e
 
     def encode_single(self, text: str) -> np.ndarray:
-        """
-        Genera embedding para un solo texto.
+        """Generate an embedding for a single text string.
 
         Returns:
-            numpy array shape (embedding_dim,).
+            numpy array of shape (embedding_dim,).
         """
         return self.encode([text])[0]
 
     # ── Cache cleanup ─────────────────────────────────────────────────
 
-    def unload(self):
-        """Libera el modelo de memoria."""
+    def unload(self) -> None:
+        """Release the model from memory."""
         self._model = None
         self._tokenizer = None
-        import gc
         gc.collect()
         try:
             import torch
+
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
         except ImportError:
             pass
-        logger.info("Modelo BERT descargado")
+        logger.info("BERT model unloaded")

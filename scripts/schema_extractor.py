@@ -1,35 +1,39 @@
 """
-schema_extractor.py — Extracción de metadatos desde Oracle Database
+schema_extractor.py — Metadata extraction from Oracle Database
 
-Propósito:
-  Extraer el esquema completo de una base de datos Oracle: tablas, columnas,
-  tipos de dato, restricciones (PK, FK, Unique), índices, y nulabilidad.
+Purpose:
+  Extract the full schema from an Oracle database: tables, columns,
+  data types, constraints (PK, FK, Unique), indexes, and nullability.
 
-  Este módulo es el punto de entrada de la Fase 2 del pipeline
-  (ML sobre esquemas de BD). Los datos extraídos alimentan los módulos
-  de preprocesamiento textual, embeddings BERT y clustering.
+  This module is the entry point for Phase 2 of the pipeline
+  (ML on database schemas). The extracted data feeds the text
+  preprocessing, BERT embedding, and clustering modules.
 
-Flujo:
-  1. Conectar a Oracle (reusa OracleConnector)
-  2. Query a vistas del diccionario de datos:
+Flow:
+  1. Connect to Oracle (reuses OracleConnector)
+  2. Query data dictionary views:
      - user_tables
      - user_tab_columns
      - user_constraints / user_cons_columns
      - user_ind_columns
-  3. Poblar dataclasses anidadas: DatabaseSchema → TableMetadata → ColumnMetadata
-  4. Serializar a dict/JSON para consumo por otros módulos
+  3. Populate nested dataclasses: DatabaseSchema -> TableMetadata -> ColumnMetadata
+  4. Serialize to dict/JSON for consumption by other modules
 
-Uso:
+Usage:
   extractor = SchemaExtractor(connection)
   schema = extractor.extract_all()
   for table in schema.tables:
       print(table.name, len(table.columns))
 """
 
-import oracledb
+from __future__ import annotations
+
 import logging
-from dataclasses import dataclass, field, asdict
-from typing import List, Optional
+from dataclasses import asdict, dataclass, field
+from typing import Any
+
+import oracledb
+from exceptions import SchemaError
 
 logger = logging.getLogger(__name__)
 
@@ -38,44 +42,54 @@ logger = logging.getLogger(__name__)
 # Data Classes
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class ColumnMetadata:
+    """Metadata for a single database column."""
+
     name: str
     data_type: str
     nullable: bool
-    data_length: Optional[int] = None
-    data_precision: Optional[int] = None
-    data_scale: Optional[int] = None
+    data_length: int | None = None
+    data_precision: int | None = None
+    data_scale: int | None = None
     is_primary_key: bool = False
     is_foreign_key: bool = False
     is_unique: bool = False
     is_indexed: bool = False
-    fk_references_table: Optional[str] = None
-    fk_references_column: Optional[str] = None
-    fk_name: Optional[str] = None
-    default_value: Optional[str] = None
-    comments: Optional[str] = None
+    fk_references_table: str | None = None
+    fk_references_column: str | None = None
+    fk_name: str | None = None
+    default_value: str | None = None
+    comments: str | None = None
 
 
 @dataclass
 class TableMetadata:
+    """Metadata for a single database table."""
+
     name: str
-    columns: List[ColumnMetadata] = field(default_factory=list)
-    table_comment: Optional[str] = None
-    row_count_approx: Optional[int] = None
+    columns: list[ColumnMetadata] = field(default_factory=list)
+    table_comment: str | None = None
+    row_count_approx: int | None = None
 
 
 @dataclass
 class DatabaseSchema:
-    tables: List[TableMetadata] = field(default_factory=list)
+    """Container for the full extracted database schema."""
 
-    def table_names(self) -> List[str]:
+    tables: list[TableMetadata] = field(default_factory=list)
+
+    def table_names(self) -> list[str]:
+        """Return the list of table names."""
         return [t.name for t in self.tables]
 
     def total_columns(self) -> int:
+        """Return the total number of columns across all tables."""
         return sum(len(t.columns) for t in self.tables)
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize the schema to a dictionary."""
         return {"tables": [asdict(t) for t in self.tables]}
 
 
@@ -83,70 +97,74 @@ class DatabaseSchema:
 # Schema Extractor
 # ---------------------------------------------------------------------------
 
+
 class SchemaExtractor:
     """
-    Extrae metadatos del esquema de una base de datos Oracle.
+    Extracts schema metadata from an Oracle database.
 
-    Consulta las vistas del diccionario de datos del usuario actual
-    para construir un DatabaseSchema completo con información de
-    columnas, tipos, restricciones e índices.
+    Queries the data dictionary views for the current user to build
+    a complete DatabaseSchema with column types, constraints, and indexes.
     """
 
-    def __init__(self, connection: oracledb.Connection):
+    def __init__(self, connection: oracledb.Connection) -> None:
         self.connection = connection
         self.cursor = connection.cursor()
 
-    # ── Método principal ──────────────────────────────────────────────
+    # ── Main method ────────────────────────────────────────────────────
 
     def extract_all(self) -> DatabaseSchema:
         """
-        Extrae el esquema completo de la base de datos.
+        Extract the full database schema.
 
         Returns:
-            DatabaseSchema con todas las tablas, columnas y metadatos.
+            DatabaseSchema with all tables, columns, and metadata.
+
+        Raises:
+            SchemaError: If any query against the data dictionary fails.
         """
-        table_names = self._get_table_names()
-        tables = []
+        try:
+            table_names = self._get_table_names()
+            tables: list[TableMetadata] = []
 
-        for tname in table_names:
-            columns = self._get_columns(tname)
-            pk_cols = self._get_primary_key_columns(tname)
-            fk_info = self._get_foreign_keys(tname)
-            unique_cols = self._get_unique_columns(tname)
-            indexed_cols = self._get_indexed_columns(tname)
+            for tname in table_names:
+                columns = self._get_columns(tname)
+                pk_cols = self._get_primary_key_columns(tname)
+                fk_info = self._get_foreign_keys(tname)
+                unique_cols = self._get_unique_columns(tname)
+                indexed_cols = self._get_indexed_columns(tname)
 
-            for col in columns:
-                col.is_primary_key = col.name in pk_cols
-                col.is_foreign_key = col.name in fk_info
-                if col.is_foreign_key:
-                    ref = fk_info[col.name]
-                    col.fk_references_table = ref["ref_table"]
-                    col.fk_references_column = ref["ref_column"]
-                    col.fk_name = ref["fk_name"]
-                col.is_unique = col.name in unique_cols
-                col.is_indexed = col.name in indexed_cols
+                for col in columns:
+                    col.is_primary_key = col.name in pk_cols
+                    col.is_foreign_key = col.name in fk_info
+                    if col.is_foreign_key:
+                        ref = fk_info[col.name]
+                        col.fk_references_table = ref["ref_table"]
+                        col.fk_references_column = ref["ref_column"]
+                        col.fk_name = ref["fk_name"]
+                    col.is_unique = col.name in unique_cols
+                    col.is_indexed = col.name in indexed_cols
 
-            tables.append(TableMetadata(name=tname, columns=columns))
+                tables.append(TableMetadata(name=tname, columns=columns))
 
-        logger.info(
-            "Esquema extraído: %d tablas, %d columnas",
-            len(tables),
-            sum(len(t.columns) for t in tables),
-        )
-        return DatabaseSchema(tables=tables)
+            logger.info(
+                "Schema extracted: %d tables, %d columns",
+                len(tables),
+                sum(len(t.columns) for t in tables),
+            )
+            return DatabaseSchema(tables=tables)
+        except oracledb.Error as exc:
+            raise SchemaError(f"Failed to extract schema: {exc}") from exc
 
-    # ── Consultas al diccionario de datos ─────────────────────────────
+    # ── Data dictionary queries ────────────────────────────────────────
 
-    def _get_table_names(self) -> List[str]:
-        """Obtiene nombres de tablas del usuario actual."""
-        self.cursor.execute(
-            "SELECT table_name FROM user_tables ORDER BY table_name"
-        )
+    def _get_table_names(self) -> list[str]:
+        """Return table names for the current user."""
+        self.cursor.execute("SELECT table_name FROM user_tables ORDER BY table_name")
         return [row[0] for row in self.cursor.fetchall()]
 
-    def _get_columns(self, table_name: str) -> List[ColumnMetadata]:
+    def _get_columns(self, table_name: str) -> list[ColumnMetadata]:
         """
-        Obtiene columnas de una tabla con tipo, nulabilidad y longitud.
+        Return columns for a table with type, nullability, and length.
         """
         self.cursor.execute(
             """
@@ -164,7 +182,7 @@ class SchemaExtractor:
             """,
             table_name=table_name,
         )
-        columns = []
+        columns: list[ColumnMetadata] = []
         for row in self.cursor.fetchall():
             col = ColumnMetadata(
                 name=row[0],
@@ -178,9 +196,9 @@ class SchemaExtractor:
             columns.append(col)
         return columns
 
-    def _get_primary_key_columns(self, table_name: str) -> set:
+    def _get_primary_key_columns(self, table_name: str) -> set[str]:
         """
-        Obtiene conjunto de nombres de columna que forman la PK.
+        Return the set of column names that form the primary key.
         """
         self.cursor.execute(
             """
@@ -195,10 +213,10 @@ class SchemaExtractor:
         )
         return {row[0] for row in self.cursor.fetchall()}
 
-    def _get_foreign_keys(self, table_name: str) -> dict:
+    def _get_foreign_keys(self, table_name: str) -> dict[str, dict[str, str]]:
         """
-        Obtiene diccionario {col_name -> {ref_table, ref_column, fk_name}}
-        para columnas que son llave foránea.
+        Return a dict {col_name -> {ref_table, ref_column, fk_name}}
+        for columns that are foreign keys.
         """
         self.cursor.execute(
             """
@@ -220,7 +238,7 @@ class SchemaExtractor:
             """,
             table_name=table_name,
         )
-        fk_map = {}
+        fk_map: dict[str, dict[str, str]] = {}
         for row in self.cursor.fetchall():
             fk_map[row[0]] = {
                 "ref_table": row[1],
@@ -229,9 +247,9 @@ class SchemaExtractor:
             }
         return fk_map
 
-    def _get_unique_columns(self, table_name: str) -> set:
+    def _get_unique_columns(self, table_name: str) -> set[str]:
         """
-        Obtiene conjunto de columnas con constraint UNIQUE.
+        Return the set of columns with a UNIQUE constraint.
         """
         self.cursor.execute(
             """
@@ -246,9 +264,9 @@ class SchemaExtractor:
         )
         return {row[0] for row in self.cursor.fetchall()}
 
-    def _get_indexed_columns(self, table_name: str) -> set:
+    def _get_indexed_columns(self, table_name: str) -> set[str]:
         """
-        Obtiene conjunto de columnas que tienen algún índice.
+        Return the set of columns that have an index.
         """
         self.cursor.execute(
             """
@@ -260,8 +278,8 @@ class SchemaExtractor:
         )
         return {row[0] for row in self.cursor.fetchall()}
 
-    # ── Utilidad ──────────────────────────────────────────────────────
+    # ── Utility ────────────────────────────────────────────────────────
 
-    def close(self):
-        """Cierra el cursor interno."""
+    def close(self) -> None:
+        """Close the internal cursor."""
         self.cursor.close()

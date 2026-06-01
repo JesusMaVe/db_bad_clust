@@ -1,31 +1,33 @@
 """
-text_preprocessor.py — Preprocesamiento textual de nombres de columnas
+text_preprocessor.py — Textual preprocessing of column names
 
-Propósito:
-  Transformar nombres técnicos de columnas (camelCase, snake_case, UPPER_CASE)
-  en texto limpio y contextualizado para alimentar BERT.
+Purpose:
+  Transform technical column names (camelCase, snake_case, UPPER_CASE)
+  into clean, contextualized text for BERT input.
 
   Pipeline:
-    1. Separar camelCase / snake_case / UPPER_CASE
-    2. Expandir abreviaturas comunes (ID → identifier, FK → foreign key, etc.)
-    3. Eliminar prefijos redundantes (tbl_, col_, fld_)
-    4. Poner en minúsculas y colapsar espacios
-    5. Contextualizar con nombre de tabla → "clientes: nombre cliente"
+    1. Split camelCase / snake_case / UPPER_CASE
+    2. Expand common abbreviations (ID → identifier, FK → foreign key, etc.)
+    3. Remove redundant prefixes (tbl_, col_, fld_)
+    4. Lowercase and collapse whitespace
+    5. Contextualize with table name → "customers: customer name"
 
-Uso:
+Usage:
   preprocessor = TextPreprocessor()
   text = preprocessor.process("FECHA_NACIMIENTO", table_name="EMPLEADOS")
   # → "empleados: fecha nacimiento"
 """
 
-import re
+from __future__ import annotations
+
 import logging
+import re
 
 logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Diccionario de abreviaturas
+# Abbreviation dictionary
 # ---------------------------------------------------------------------------
 
 ABBREVIATIONS = {
@@ -55,6 +57,7 @@ ABBREVIATIONS = {
     "curr": "current",
     "avg": "average",
     "min": "minimum",
+    "minute": "minute",
     "max": "maximum",
     "cnt": "count",
     "total": "total",
@@ -98,7 +101,6 @@ ABBREVIATIONS = {
     "dt": "date",
     "hr": "hour",
     "hrs": "hours",
-    "min": "minute",
     "sec": "second",
     "ms": "milliseconds",
     "ts": "timestamp",
@@ -109,103 +111,104 @@ ABBREVIATIONS = {
 # Preprocessor
 # ---------------------------------------------------------------------------
 
+
 class TextPreprocessor:
     """
-    Preprocesa nombres de columna/tabla para generar texto limpio.
+    Preprocesses column/table names to generate clean text.
 
-    El texto resultante está en minúsculas, sin prefijos redundantes,
-    con abreviaturas expandidas y contextualizado con el nombre de la tabla.
+    The resulting text is lowercase, without redundant prefixes,
+    with expanded abbreviations and contextualized with the table name.
     """
 
-    def __init__(self, abbreviations: dict = None):
+    def __init__(self, abbreviations: dict[str, str] | None = None) -> None:
         self.abbreviations = abbreviations or ABBREVIATIONS
-        # Compilar diccionario para búsqueda eficiente
+        # Compile dictionary for efficient lookup
         self._abbrev_lower = {k.lower(): v for k, v in self.abbreviations.items()}
 
-    # ── Pipeline completo ─────────────────────────────────────────────
+    # ── Full pipeline ─────────────────────────────────────────────────
 
-    def process(self, column_name: str, table_name: str = None) -> str:
+    def process(self, column_name: str, table_name: str | None = None) -> str:
         """
-        Aplica el pipeline completo de preprocesamiento.
+        Apply the full preprocessing pipeline.
 
         Args:
-            column_name: Nombre de la columna (ej. "FECHA_NACIMIENTO").
-            table_name: Nombre de la tabla contenedora (ej. "EMPLEADOS").
+            column_name: Column name (e.g. "FECHA_NACIMIENTO").
+            table_name: Container table name (e.g. "EMPLEADOS").
 
         Returns:
-            Texto limpio y contextualizado (ej. "empleados: fecha nacimiento").
+            Clean, contextualized text (e.g. "empleados: fecha nacimiento").
         """
         text = column_name
 
-        # 1. Separar camelCase
+        # 1. Split camelCase
         text = self._split_camel_case(text)
 
-        # 2. Separar snake_case / UPPER_CASE
+        # 2. Split snake_case / UPPER_CASE
         text = self._split_on_underscores(text)
 
-        # 3. Remover prefijos redundantes
+        # 3. Remove redundant prefixes
         text = self._remove_redundant_prefixes(text)
 
-        # 4. Tokenizar y expandir abreviaturas
+        # 4. Tokenize and expand abbreviations
         tokens = text.split()
         tokens = [self._expand_token(t) for t in tokens]
 
-        # 5. Colapsar whitespace y lowercase
+        # 5. Collapse whitespace and lowercase
         text = " ".join(tokens).lower().strip()
 
-        # 6. Contextualizar con nombre de tabla
+        # 6. Contextualize with table name
         if table_name:
-            table_clean = self.process(table_name) if table_name else ""
+            table_clean = self.process(table_name)
             text = f"{table_clean}: {text}"
 
         return text
 
-    def process_batch(self, columns: list, table_name: str = None) -> list:
+    def process_batch(self, columns: list[str], table_name: str | None = None) -> list[str]:
         """
-        Procesa una lista de nombres de columna.
+        Process a list of column names.
 
         Args:
-            columns: Lista de nombres de columna.
-            table_name: Nombre de la tabla (opcional, mismo para todas).
+            columns: List of column names.
+            table_name: Table name (optional, same for all).
 
         Returns:
-            Lista de textos preprocesados.
+            List of preprocessed texts.
         """
         return [self.process(c, table_name) for c in columns]
 
-    # ── Pasos individuales ────────────────────────────────────────────
+    # ── Individual steps ──────────────────────────────────────────────
 
     @staticmethod
     def _split_camel_case(text: str) -> str:
         """
-        Separa camelCase y PascalCase insertando espacios antes de
-        mayúsculas, manejando secuencias consecutivas (UUIDValue → uuid value).
+        Split camelCase and PascalCase by inserting spaces before
+        uppercase letters, handling consecutive sequences (UUIDValue → uuid value).
         """
-        # Insertar espacio antes de mayúscula que sigue a minúscula
-        text = re.sub(r'([a-záéíóúñ])([A-ZÁÉÍÓÚÑ])', r'\1 \2', text)
-        # Insertar espacio antes de mayúscula que sigue a múltiples mayúsculas
-        # (ej. "XMLParser" → "XML Parser")
-        text = re.sub(r'([A-ZÁÉÍÓÚÑ]+)([A-ZÁÉÍÓÚÑ][a-záéíóúñ])', r'\1 \2', text)
+        # Insert space before uppercase that follows lowercase
+        text = re.sub(r"([a-záéíóúñ])([A-ZÁÉÍÓÚÑ])", r"\1 \2", text)
+        # Insert space before uppercase that follows multiple uppercase letters
+        # (e.g. "XMLParser" → "XML Parser")
+        text = re.sub(r"([A-ZÁÉÍÓÚÑ]+)([A-ZÁÉÍÓÚÑ][a-záéíóúñ])", r"\1 \2", text)
         return text
 
     @staticmethod
     def _split_on_underscores(text: str) -> str:
-        """Reemplaza guiones bajos con espacios."""
+        """Replace underscores with spaces."""
         return text.replace("_", " ")
 
     @staticmethod
     def _remove_redundant_prefixes(text: str) -> str:
-        """Elimina prefijos como tbl_, col_, fld_ al inicio del texto."""
+        """Remove prefixes like tbl_, col_, fld_ at the start of text."""
         prefixes = ["tbl ", "col ", "fld ", "tab "]
         for prefix in prefixes:
             if text.lower().startswith(prefix):
-                text = text[len(prefix):].strip()
+                text = text[len(prefix) :].strip()
                 break
         return text
 
     def _expand_token(self, token: str) -> str:
-        """Expande una abreviatura si está en el diccionario."""
-        # Buscar en diccionario de abreviaturas (case-insensitive)
+        """Expand an abbreviation if found in the dictionary."""
+        # Look up in abbreviation dictionary (case-insensitive)
         lower = token.lower().strip(".,;:!?()[]{}")
         expansion = self._abbrev_lower.get(lower)
         if expansion:
@@ -214,11 +217,12 @@ class TextPreprocessor:
 
 
 # ---------------------------------------------------------------------------
-# Utilidad rápida
+# Quick utility
 # ---------------------------------------------------------------------------
 
-def preprocess(column_name: str, table_name: str = None) -> str:
+
+def preprocess(column_name: str, table_name: str | None = None) -> str:
     """
-    Función de acceso directo (sin instanciar clase).
+    Quick-access function (no class instantiation needed).
     """
     return TextPreprocessor().process(column_name, table_name)

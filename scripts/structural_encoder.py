@@ -1,62 +1,68 @@
 """
-structural_encoder.py — Codificación estructural de metadatos de columnas
+structural_encoder.py — Structural encoding of column metadata
 
-Propósito:
-  Convierte los metadatos estructurales de cada columna en vectores
-  numéricos para el vector compuesto φ(aⱼ).
+Purpose:
+  Convert structural metadata of each column into numeric
+  vectors for the composite vector φ(aⱼ).
 
-  Dos componentes:
-    1. One-hot encoding del tipo de dato (VARCHAR, NUMBER, DATE, CLOB, etc.)
-    2. Codificación binaria de restricciones (PK, FK, Unique, Nullable, Indexed)
+  Two components:
+    1. One-hot encoding of data type (VARCHAR, NUMBER, DATE, CLOB, etc.)
+    2. Binary encoding of constraints (PK, FK, Unique, Nullable, Indexed)
 
-Uso:
+Usage:
   encoder = StructuralEncoder()
   e_type = encoder.encode_data_types(columns)    # → (N, n_types)
   e_rest = encoder.encode_constraints(columns)   # → (N, n_constraints)
 """
 
-import numpy as np
-from typing import List
+from __future__ import annotations
 
+import numpy as np
 from schema_extractor import ColumnMetadata
 
-
 # ---------------------------------------------------------------------------
-# Taxonomía de tipos Oracle → canónicos
+# Oracle type → canonical mapping
 # ---------------------------------------------------------------------------
 
 ORACLE_TYPE_MAP = {
-    "VARCHAR2":  "VARCHAR",
-    "VARCHAR":   "VARCHAR",
+    "VARCHAR2": "VARCHAR",
+    "VARCHAR": "VARCHAR",
     "NVARCHAR2": "VARCHAR",
-    "CHAR":      "CHAR",
-    "NCHAR":     "CHAR",
-    "NUMBER":    "NUMBER",
-    "FLOAT":     "FLOAT",
-    "BINARY_FLOAT":  "FLOAT",
+    "CHAR": "CHAR",
+    "NCHAR": "CHAR",
+    "NUMBER": "NUMBER",
+    "FLOAT": "FLOAT",
+    "BINARY_FLOAT": "FLOAT",
     "BINARY_DOUBLE": "FLOAT",
-    "INT":       "NUMBER",
-    "INTEGER":   "NUMBER",
-    "BIGINT":    "NUMBER",
-    "SMALLINT":  "NUMBER",
-    "DECIMAL":   "NUMBER",
-    "DATE":      "DATE",
+    "INT": "NUMBER",
+    "INTEGER": "NUMBER",
+    "BIGINT": "NUMBER",
+    "SMALLINT": "NUMBER",
+    "DECIMAL": "NUMBER",
+    "DATE": "DATE",
     "TIMESTAMP": "TIMESTAMP",
-    "CLOB":      "CLOB",
-    "NCLOB":     "CLOB",
-    "BLOB":      "BLOB",
-    "RAW":       "RAW",
-    "ROWID":     "ROWID",
-    "UROWID":    "ROWID",
-    "XMLTYPE":   "XML",
+    "CLOB": "CLOB",
+    "NCLOB": "CLOB",
+    "BLOB": "BLOB",
+    "RAW": "RAW",
+    "ROWID": "ROWID",
+    "UROWID": "ROWID",
+    "XMLTYPE": "XML",
 }
 
 # Orden canónico (el índice en el one-hot corresponde a esta lista)
 CANONICAL_TYPES = [
-    "VARCHAR", "CHAR", "NUMBER", "FLOAT",
-    "DATE", "TIMESTAMP",
-    "CLOB", "BLOB",
-    "RAW", "ROWID", "XML",
+    "VARCHAR",
+    "CHAR",
+    "NUMBER",
+    "FLOAT",
+    "DATE",
+    "TIMESTAMP",
+    "CLOB",
+    "BLOB",
+    "RAW",
+    "ROWID",
+    "XML",
     "OTHER",
 ]
 
@@ -74,30 +80,31 @@ CONSTRAINT_NAMES = [
 # Structural Encoder
 # ---------------------------------------------------------------------------
 
+
 class StructuralEncoder:
     """
-    Codifica metadatos estructurales de columnas en vectores numéricos.
+    Encodes structural column metadata into numeric vectors.
 
-    Atributos:
-        type_vocab: List[str] — taxonomía canónica de tipos.
-        constraint_names: List[str] — nombres de constraints binarios.
+    Attributes:
+        type_vocab: List[str] — canonical type taxonomy.
+        constraint_names: List[str] — binary constraint names.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.type_vocab = CANONICAL_TYPES
         self.constraint_names = CONSTRAINT_NAMES
-        self._type_to_idx = {t: i for i, t in enumerate(self.type_vocab)}
+        self._type_to_idx: dict[str, int] = {t: i for i, t in enumerate(self.type_vocab)}
 
-    # ── One-hot de tipos de dato ──────────────────────────────────────
+    # ── One-hot data type encoding ────────────────────────────────────
 
     def _canonical_type(self, oracle_type: str) -> str:
-        """Mapea tipo Oracle a tipo canónico."""
+        """Map Oracle type to canonical type."""
         base = oracle_type.upper().split("(")[0].split(" ")[0]
         return ORACLE_TYPE_MAP.get(base, "OTHER")
 
-    def encode_data_types(self, columns: List[ColumnMetadata]) -> np.ndarray:
+    def encode_data_types(self, columns: list[ColumnMetadata]) -> np.ndarray:
         """
-        One-hot encoding de tipos de dato.
+        One-hot encoding of data types.
 
         Returns:
             numpy array shape (len(columns), len(CANONICAL_TYPES)).
@@ -112,16 +119,16 @@ class StructuralEncoder:
 
         return matrix
 
-    # ── Binario de restricciones ──────────────────────────────────────
+    # ── Binary constraint encoding ────────────────────────────────────
 
-    def encode_constraints(self, columns: List[ColumnMetadata]) -> np.ndarray:
+    def encode_constraints(self, columns: list[ColumnMetadata]) -> np.ndarray:
         """
-        Codificación binaria de restricciones.
+        Binary encoding of constraints.
 
-        Orden: [is_primary_key, is_foreign_key, is_unique, is_indexed, nullable]
+        Order: [is_primary_key, is_foreign_key, is_unique, is_indexed, nullable]
 
         Returns:
-            numpy array shape (len(columns), 5) con valores {0.0, 1.0}.
+            numpy array shape (len(columns), 5) with values {0.0, 1.0}.
         """
         matrix = np.zeros((len(columns), 5), dtype=np.float32)
 
@@ -134,31 +141,57 @@ class StructuralEncoder:
 
         return matrix
 
-    # ── Todo en uno ───────────────────────────────────────────────────
+    # ── All-in-one ────────────────────────────────────────────────────
 
-    def encode_all(self, columns: List[ColumnMetadata]) -> dict:
+    def encode_all(self, columns: list[ColumnMetadata]) -> dict[str, np.ndarray]:
         """
-        Codifica tipos y constraints; devuelve dict con ambos.
+        Encode types and constraints; return dict with both.
 
         Returns:
             {"data_types": ndarray (N, n_types),
-             "constraints": ndarray (N, n_constraints)}
+             "constraints": ndarray (N, n_constraints),
+             "statistical": ndarray (N, 1)}
         """
         return {
             "data_types": self.encode_data_types(columns),
             "constraints": self.encode_constraints(columns),
+            "statistical": self.encode_statistical(columns),
         }
 
+    # ── Statistical features (continuous) ─────────────────────────────
+
+    def encode_statistical(self, columns: list[ColumnMetadata]) -> np.ndarray:
+        """
+        Encode continuous statistical features per column.
+
+        Currently: data_length (log-transformed to reduce skew).
+
+        Returns:
+            numpy array shape (len(columns), 1) with data_length
+            on logarithmic scale (log1p) to reduce skew.
+        """
+        matrix = np.zeros((len(columns), 1), dtype=np.float32)
+        for i, col in enumerate(columns):
+            raw = float(col.data_length) if col.data_length is not None else 0.0
+            matrix[i, 0] = np.log1p(raw)
+        return matrix
+
 
 # ---------------------------------------------------------------------------
-# Cardinaidad de tipos
+# Type cardinality
 # ---------------------------------------------------------------------------
+
 
 def type_vocab_size() -> int:
-    """Número de tipos canónicos (útil para calcular dimensión)."""
+    """Number of canonical types (useful for dimension calculation)."""
     return len(CANONICAL_TYPES)
 
 
 def constraint_dim() -> int:
-    """Dimensión del vector de constraints (siempre 5)."""
+    """Dimension of the constraint vector (always 5)."""
     return len(CONSTRAINT_NAMES)
+
+
+def statistical_dim() -> int:
+    """Dimension of the statistical vector (currently 1: data_length)."""
+    return 1

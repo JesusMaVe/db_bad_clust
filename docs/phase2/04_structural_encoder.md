@@ -1,15 +1,15 @@
-# Módulo 4: Structural Encoder
+# Modulo 4: Structural Encoder
 
-## Propósito
+## Proposito
 
-Convierte los metadatos estructurales de cada columna en vectores numéricos:
+Convierte los metadatos estructurales de cada columna en vectores numericos:
 
-1. **One-hot encoding** del tipo de dato canónico (VARCHAR, NUMBER, DATE, etc.)
-2. **Codificación binaria** de restricciones (PK, FK, Unique, Nullable, Indexed)
+1. **One-hot encoding** del tipo de dato canonico (VARCHAR, NUMBER, DATE, etc.)
+2. **Codificacion binaria** de restricciones (PK, FK, Unique, Nullable, Indexed)
 
-Estos vectores se concatenan con los embeddings BERT en el Feature Builder (Módulo 5).
+Estos vectores se concatenan con los embeddings BERT en el Feature Builder (Modulo 5).
 
-## Ubicación
+## Ubicacion
 
 `scripts/structural_encoder.py`
 
@@ -20,20 +20,20 @@ from structural_encoder import StructuralEncoder
 
 encoder = StructuralEncoder()
 
-# One-hot de tipos → (N, 12)
+# One-hot de tipos -> (N, 12)
 e_type = encoder.encode_data_types(columns)
 
-# Binario de constraints → (N, 5)
+# Binario de constraints -> (N, 5)
 e_rest = encoder.encode_constraints(columns)
 
 # Todo en uno
 encoded = encoder.encode_all(columns)
-# → {"data_types": ..., "constraints": ...}
+# -> {"data_types": ..., "constraints": ...}
 ```
 
-## Taxonomía de Tipos Oracle → Canónicos
+## Taxonomia de Tipos Oracle -> Canonicos
 
-| Tipo Oracle          | Canónico  | Índice |
+| Tipo Oracle          | Canonico  | Indice |
 | -------------------- | --------- | ------ |
 | VARCHAR2, NVARCHAR2  | VARCHAR   | 0      |
 | CHAR, NCHAR          | CHAR      | 1      |
@@ -50,10 +50,10 @@ encoded = encoder.encode_all(columns)
 
 ## Constraints Binarios
 
-| Posición | Campo            | Descripción            |
+| Posicion | Campo            | Descripcion            |
 | -------- | ---------------- | ---------------------- |
 | 0        | `is_primary_key` | 1 si es PK             |
 | 1        | `is_foreign_key` | 1 si es FK             |
 | 2        | `is_unique`      | 1 si tiene constraint U |
-| 3        | `is_indexed`     | 1 si tiene índice       |
+| 3        | `is_indexed`     | 1 si tiene indice       |
 | 4        | `nullable`       | 1 si permite NULL       |
