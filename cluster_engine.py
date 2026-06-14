@@ -154,19 +154,17 @@ class ClusterEngine:
         if line_len_sq == 0.0:
             return max(float(di[n_pts // 2]), 1e-6)
 
-        max_dist = -1.0
-        knee_idx = n_pts // 2  # fallback
-        for i in range(1, n_pts - 1):
-            xi = float(i)
-            yi = float(di[i])
-            # perpendicular distance from (xi, yi) to line
-            t = ((xi - x0) * dx + (yi - y0) * dy) / line_len_sq
-            proj_x = x0 + t * dx
-            proj_y = y0 + t * dy
-            dist = (xi - proj_x) ** 2 + (yi - proj_y) ** 2
-            if dist > max_dist:
-                max_dist = dist
-                knee_idx = i
+        # Vectorized knee detection
+        indices = np.arange(1, n_pts - 1)
+        xi = indices.astype(float)
+        yi = di[1:-1].astype(float)
+
+        t = ((xi - x0) * dx + (yi - y0) * dy) / line_len_sq
+        proj_x = x0 + t * dx
+        proj_y = y0 + t * dy
+        dists = (xi - proj_x) ** 2 + (yi - proj_y) ** 2
+
+        knee_idx = int(np.argmax(dists)) + 1  # +1 because we started from index 1
 
         eps: float = float(di[knee_idx])
         return max(eps, 1e-6)

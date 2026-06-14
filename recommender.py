@@ -25,6 +25,7 @@ from typing import Any
 
 import numpy as np
 from schema_extractor import ColumnMetadata, DatabaseSchema
+from recommendation_reporter import RecommendationReporter
 
 logger = logging.getLogger(__name__)
 
@@ -228,28 +229,8 @@ class Recommender:
 
     @staticmethod
     def print_recommendations(recommendations: list[dict[str, Any]]) -> str:
-        """Format recommendations as text."""
-        lines: list[str] = []
-        lines.append("=" * 60)
-        lines.append("RECOMMENDATIONS PER CLUSTER")
-        lines.append("=" * 60)
+        """Format recommendations as text.
 
-        for rec in recommendations:
-            lines.append(
-                f"\nCluster #{rec['cluster_id']} "
-                f"[{rec['severity'].upper()}] "
-                f"({rec['total_columns']} columns, "
-                f"{len(rec['tables_involved'])} tables)"
-            )
-            lines.append(f"  Dominant type: {rec['dominant_type']}")
-            lines.append(f"  Tables: {', '.join(rec['tables_involved'][:5])}")
-            if len(rec["tables_involved"]) > 5:
-                lines.append(f"    ... and {len(rec['tables_involved']) - 5} more")
-
-            for issue in rec["issues"]:
-                lines.append(f"  - {issue}")
-
-            for fix in rec["recommendations"]:
-                lines.append(f"    -> {fix}")
-
-        return "\n".join(lines)
+        Delegates to RecommendationReporter for formatting.
+        """
+        return RecommendationReporter.format_recommendations(recommendations)

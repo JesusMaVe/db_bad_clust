@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import gc
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
 import numpy as np
 from exceptions import EmbeddingError
@@ -25,6 +25,28 @@ if TYPE_CHECKING:
     from transformers import AutoModel, AutoTokenizer
 
 logger = logging.getLogger(__name__)
+
+
+class Tokenizer(Protocol):
+    """Protocol for tokenizers (AutoTokenizer or mock)."""
+
+    def __call__(
+        self,
+        texts: list[str],
+        padding: bool = True,
+        truncation: bool = True,
+        max_length: int = 32,
+        return_tensors: str = "pt",
+    ) -> dict: ...
+
+
+class Model(Protocol):
+    """Protocol for models (AutoModel or mock)."""
+
+    config: dict
+    def eval(self) -> None: ...
+    def to(self, device: str) -> None: ...
+    def __call__(self, **kwargs) -> object: ...
 
 
 class BERTEmbedder:
@@ -36,6 +58,8 @@ class BERTEmbedder:
         model_name: Hugging Face model identifier.
         device: "auto" (CPU/MPS/CUDA), "cpu", "cuda", or "mps".
         max_length: Maximum token count per text (short names → 32).
+        tokenizer: Optional pre-loaded tokenizer (for testing/DI).
+        model: Optional pre-loaded model (for testing/DI).
     """
 
     def __init__(
@@ -43,11 +67,13 @@ class BERTEmbedder:
         model_name: str = "bert-base-multilingual-cased",
         device: str = "auto",
         max_length: int = 32,
+        tokenizer: Tokenizer | None = None,
+        model: Model | None = None,
     ) -> None:
         self.model_name = model_name
         self.max_length = max_length
-        self._model: AutoModel | None = None
-        self._tokenizer: AutoTokenizer | None = None
+        self._model: Model | None = model
+        self._tokenizer: Tokenizer | None = tokenizer
         self._device: str = self._resolve_device(device)
 
     # ── Lazy model initialisation ────────────────────────────────────
@@ -106,11 +132,12 @@ class BERTEmbedder:
 
     # ── Encoding ──────────────────────────────────────────────────────
 
-    def encode(self, texts: list[str]) -> np.ndarray:
+    def encode(self, texts: list[str], batch_size: int = 32) -> np.ndarray:
         """Generate embeddings for a list of preprocessed texts.
 
         Args:
             texts: List of preprocessed column-name strings.
+            batch_size: Number of texts to process per batch (default 32).
 
         Returns:
             numpy array of shape (len(texts), embedding_dim).
@@ -130,20 +157,26 @@ class BERTEmbedder:
             raise EmbeddingError("torch is required for BERT inference") from e
 
         try:
-            inputs = self._tokenizer(  # type: ignore[misc]
-                texts,
-                padding=True,
-                truncation=True,
-                max_length=self.max_length,
-                return_tensors="pt",
-            )
+            all_embeddings = []
 
-            with torch.no_grad():
-                inputs = {k: v.to(self._device) for k, v in inputs.items()}
-                outputs = self._model(**inputs)  # type: ignore[misc]
-                cls_vectors = outputs.last_hidden_state[:, 0, :].cpu().numpy()
+            for i in range(0, len(texts), batch_size):
+                batch = texts[i:i + batch_size]
 
-            return cls_vectors.astype(np.float32)
+                inputs = self._tokenizer(  # type: ignore[misc]
+                    batch,
+                    padding=True,
+                    truncation=True,
+                    max_length=self.max_length,
+                    return_tensors="pt",
+                )
+
+                with torch.no_grad():
+                    inputs = {k: v.to(self._device) for k, v in inputs.items()}
+                    outputs = self._model(**inputs)  # type: ignore[misc]
+                    cls_vectors = outputs.last_hidden_state[:, 0, :].cpu().numpy()
+                    all_embeddings.append(cls_vectors)
+
+            return np.concatenate(all_embeddings, axis=0).astype(np.float32)
         except Exception as e:
             raise EmbeddingError(f"BERT encoding failed: {e}") from e
 

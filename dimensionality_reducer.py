@@ -120,13 +120,24 @@ class DimensionalityReducer:
             return self._fit_transform_pca(X)
 
         n = min(self.n_components, *X.shape)
+
+        # Performance-optimized defaults
+        umap_kwargs = {
+            "n_neighbors": 15,
+            "min_dist": 0.1,
+            "metric": "euclidean",
+            "n_jobs": -1,  # Use all CPU cores
+        }
+        umap_kwargs.update(self.kwargs)
+
         self._model = umap.UMAP(
             n_components=n,
             random_state=self.random_state,
-            **self.kwargs,
+            **umap_kwargs,
         )
         result = self._model.fit_transform(X)
-        logger.info("UMAP: %s -> %s dims", X.shape[1], n)
+        logger.info("UMAP: %s -> %s dims (n_neighbors=%s, metric=%s)",
+                    X.shape[1], n, umap_kwargs["n_neighbors"], umap_kwargs["metric"])
         self._fitted = True
         return result
 
