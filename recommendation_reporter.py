@@ -3,6 +3,7 @@ recommendation_reporter.py — Report generation for recommendations
 
 Purpose:
   Generate formatted text reports for anti-pattern recommendations.
+  Separates column-level and table-level issues.
 
 Usage:
   from recommendation_reporter import RecommendationReporter
@@ -23,36 +24,73 @@ class RecommendationReporter:
     """Generate formatted recommendation reports."""
 
     @staticmethod
-    def format_recommendations(recommendations: list[dict[str, Any]]) -> str:
+    def format_recommendations(recommendations: dict[str, Any]) -> str:
         """Format recommendations as text.
 
         Args:
-            recommendations: List of recommendation dicts from Recommender.
+            recommendations: Dict with 'column_issues' and 'table_issues' groups.
 
         Returns:
-            Multi-line string report.
+            Multi-line string report with consolidated recommendations.
         """
         lines: list[str] = []
-        lines.append("=" * 60)
-        lines.append("RECOMMENDATIONS PER CLUSTER")
-        lines.append("=" * 60)
 
-        for rec in recommendations:
-            lines.append(
-                f"\nCluster #{rec['cluster_id']} "
-                f"[{rec['severity'].upper()}] "
-                f"({rec['total_columns']} columns, "
-                f"{len(rec['tables_involved'])} tables)"
-            )
-            lines.append(f"  Dominant type: {rec['dominant_type']}")
-            lines.append(f"  Tables: {', '.join(rec['tables_involved'][:5])}")
-            if len(rec["tables_involved"]) > 5:
-                lines.append(f"    ... and {len(rec['tables_involved']) - 5} more")
+        # Column-level issues
+        col_issues = recommendations.get("column_issues", [])
+        if col_issues:
+            lines.append("=" * 60)
+            lines.append("COLUMN-LEVEL ISSUES")
+            lines.append("=" * 60)
 
-            for issue in rec["issues"]:
-                lines.append(f"  - {issue}")
+            for rec in col_issues:
+                severity_icon = {"alta": "🔴", "media": "🟡", "baja": "🟢"}.get(
+                    rec["severity"], "⚪"
+                )
+                lines.append("")
+                lines.append(
+                    f"{severity_icon} [{rec['label'].upper()}] "
+                    f"Found in {rec['total_columns']} columns:"
+                )
 
-            for fix in rec["recommendations"]:
-                lines.append(f"    -> {fix}")
+                # Show first 10 columns
+                cols = rec["columns"][:10]
+                cols_str = ", ".join(cols)
+                if len(rec["columns"]) > 10:
+                    cols_str += f"... (+{len(rec['columns']) - 10} more)"
+                lines.append(f"   Columns: {cols_str}")
+
+                # Action
+                lines.append(f"   ✅ Action: {rec['action']}")
+
+        # Table-level issues
+        table_issues = recommendations.get("table_issues", [])
+        if table_issues:
+            lines.append("")
+            lines.append("=" * 60)
+            lines.append("TABLE-LEVEL ISSUES")
+            lines.append("=" * 60)
+
+            for rec in table_issues:
+                severity_icon = {"alta": "🔴", "media": "🟡", "baja": "🟢"}.get(
+                    rec["severity"], "⚪"
+                )
+                lines.append("")
+                lines.append(
+                    f"{severity_icon} [{rec['label'].upper()}] "
+                    f"{rec['total_tables']} table(s) affected:"
+                )
+
+                # Show tables
+                tables = rec["tables"][:5]
+                tables_str = ", ".join(tables)
+                if len(rec["tables"]) > 5:
+                    tables_str += f"... (+{len(rec['tables']) - 5} more)"
+                lines.append(f"   Tables: {tables_str}")
+
+                # Action
+                lines.append(f"   ✅ Action: {rec['action']}")
+
+        if not col_issues and not table_issues:
+            lines.append("No anti-patterns detected.")
 
         return "\n".join(lines)

@@ -2,233 +2,182 @@
 recommender.py — Recommendation generation for fixing anti-patterns
 
 Purpose:
-  Analyze generated clusters and produce actionable recommendations
-  to fix database design anti-patterns.
-
-  Per cluster:
-    1. Identify dominant characteristics (types, nullability, etc.)
-    2. Compare against known best practices
-    3. Generate natural language recommendation
-    4. Prioritize by severity
+  Analyze schema and produce actionable recommendations grouped by
+  anti-pattern type. Separates column-level and table-level issues
+  for clean reporting.
 
 Usage:
   recommender = Recommender()
-  recommendations = recommender.recommend(schema, labels, column_table_map)
-  recommender.print_recommendations(recommendations)
+  recommendations = recommender.recommend(schema)
+  report = recommender.print_recommendations(recommendations)
 """
 
 from __future__ import annotations
 
 import logging
-from collections import Counter, defaultdict
+from collections import defaultdict
 from typing import Any
 
-import numpy as np
 from schema_extractor import ColumnMetadata, DatabaseSchema
 from recommendation_reporter import RecommendationReporter
+from rule_engine import ColumnRuleEngine, TableRuleEngine, ClassificationResult, Severity
 
 logger = logging.getLogger(__name__)
 
-# Catalog of known anti-pattern descriptions
-ANTI_PATTERN_SIGNATURES = [
-    {
-        "name": "Tipo incorrecto",
-        "description": "Columna con tipo de dato inapropiado para su contenido semantico",
-        "severity": "alta",
-        "fix": "Usar el tipo de dato nativo correspondiente (DATE para fechas, NUMBER para numeros)",
-    },
-    {
-        "name": "Nulos en PK",
-        "description": "Columna nombrada como identificador pero permite nulos",
-        "severity": "alta",
-        "fix": "Agregar constraint NOT NULL y considerar una clave primaria real",
-    },
-    {
-        "name": "VARCHAR sobredimensionado",
-        "description": "Columna VARCHAR con longitud excesiva para el dominio de datos",
-        "severity": "media",
-        "fix": "Reducir la longitud al maximo real del dominio, o usar CLOB si es necesario",
-    },
-    {
-        "name": "Fecha como texto",
-        "description": "Fechas almacenadas en VARCHAR en vez de DATE o TIMESTAMP",
-        "severity": "alta",
-        "fix": "Migrar a columna DATE o TIMESTAMP con validacion de formato",
-    },
-    {
-        "name": "Numero como texto",
-        "description": "Valores numericos almacenados como VARCHAR (impiden calculos)",
-        "severity": "alta",
-        "fix": "Convertir a NUMBER con precision y escala adecuadas",
-    },
-    {
-        "name": "Sin indice",
-        "description": "Columna usada en JOINs o WHERE sin indice",
-        "severity": "media",
-        "fix": "Crear indice B-tree en columnas de FK y filtros frecuentes",
-    },
-    {
-        "name": "Booleano inconsistente",
-        "description": "Columna booleana con multiples convenciones (S/N, 1/0, True/False, Si/No)",
-        "severity": "media",
-        "fix": "Unificar a CHAR(1) con CHECK IN ('S','N') o NUMBER(1) con CHECK IN (0,1)",
-    },
-]
+# Action recommendations per anti-pattern type
+ANTI_PATTERN_ACTIONS = {
+    "date_as_text": "ALTER TABLE ... MODIFY (... DATE);",
+    "number_as_text": "ALTER TABLE ... MODIFY (... NUMBER);",
+    "reserved_word": "Rename column to {col}_COL or similar;",
+    "bad_boolean": "Unify to CHAR(1) with CHECK ('S','N') or NUMBER(1);",
+    "impossible_data": "Set primary key column to NOT NULL;",
+    "self_referencing": "Valid for hierarchies, but verify intent;",
+    "polymorphic": "Use separate tables per type or FK constraint per type;",
+    "giant_table": "Split into smaller, focused tables;",
+    "eav_pattern": "Normalize to proper relational design or use JSON/XML;",
+    "inconsistent_naming": "Standardize to {primary} convention;",
+}
 
 
 class Recommender:
     """
-    Generates correction recommendations based on clusters and metadata.
+    Generates correction recommendations based on schema analysis.
+    Separates column-level and table-level issues.
     """
 
-    def __init__(self, signatures: list[dict[str, Any]] | None = None) -> None:
-        self.signatures = signatures or ANTI_PATTERN_SIGNATURES
+    def __init__(self) -> None:
+        self.col_engine = ColumnRuleEngine()
+        self.table_engine = TableRuleEngine()
 
-    def recommend(
-        self,
-        schema: DatabaseSchema,
-        labels: np.ndarray,
-        column_table_map: list[str] | None = None,
-    ) -> list[dict[str, Any]]:
+    def recommend(self, schema: DatabaseSchema) -> dict[str, Any]:
         """
-        Generate recommendations for each cluster.
+        Generate recommendations grouped by anti-pattern type.
 
         Args:
             schema: DatabaseSchema extracted from Oracle.
-            labels: Cluster labels per column.
-            column_table_map: Column -> table name mapping.
 
         Returns:
-            List of structured recommendations.
+            Dict with 'column_issues' and 'table_issues' groups.
         """
         all_columns = []
         for table in schema.tables:
             for col in table.columns:
-                all_columns.append({"column": col, "table": table.name})
+                all_columns.append(col)
 
-        if column_table_map is None:
-            column_table_map = [c["table"] for c in all_columns]
+        if not all_columns:
+            return {"column_issues": [], "table_issues": []}
 
-        clusters = defaultdict(list)
-        for idx, (label, col_info) in enumerate(zip(labels, all_columns)):
-            clusters[int(label)].append(
-                {
-                    "index": idx,
-                    "table": col_info["table"],
-                    "column": col_info["column"],
-                }
-            )
+        col_results = self.col_engine.classify(all_columns, schema)
+        table_results = self.table_engine.classify(schema)
 
-        recommendations = []
-        for cluster_id, members in sorted(clusters.items()):
-            if cluster_id == -1:
-                continue
-
-            cols_in_cluster = [m["column"] for m in members]
-            tables_in_cluster = list(set(m["table"] for m in members))
-            types = Counter(c.data_type for c in cols_in_cluster)
-            nullable_count = sum(1 for c in cols_in_cluster if c.nullable)
-
-            cluster_recs = self._analyze_cluster(
-                cluster_id, members, cols_in_cluster, types, nullable_count, tables_in_cluster
-            )
-            recommendations.append(cluster_recs)
-
-        return recommendations
-
-    def _analyze_cluster(
-        self,
-        cluster_id: int,
-        members: list[dict[str, Any]],
-        cols: list[ColumnMetadata],
-        types: Counter,
-        nullable_count: int,
-        tables: list[str],
-    ) -> dict[str, Any]:
-        """Analyze an individual cluster and generate recommendations."""
-        total = len(members)
-        pct_nullable = nullable_count / total * 100 if total else 0
-        dominant_type = types.most_common(1)[0][0] if types else "unknown"
-
-        issues = []
-        fixes = []
-
-        if pct_nullable > 50:
-            issues.append(f"Mayoria de columnas permite nulos ({pct_nullable:.0f}%)")
-            fixes.append(
-                "Evaluar si los nulos son semanticamente validos o indican datos faltantes"
-            )
-
-        if dominant_type.upper().startswith("VARCHAR"):
-            # Check if any column looks like a date or number stored as text
-            date_keywords = {"FECHA", "DATE", "BIRTH", "ALTA", "CREACION", "ACTUALIZACION"}
-            num_keywords = {
-                "SALARIO",
-                "PRECIO",
-                "COSTO",
-                "MONTO",
-                "TOTAL",
-                "IMPORTE",
-                "CANTIDAD",
-                "SUELDO",
-            }
-            boolean_keywords = {"ACTIVO", "ACTIVE", "FLAG", "BOOL", "VIGENTE", "ESTADO"}
-
-            date_cols = [
-                m for m in members if any(k in m["column"].name.upper() for k in date_keywords)
-            ]
-            num_cols = [
-                m for m in members if any(k in m["column"].name.upper() for k in num_keywords)
-            ]
-            bool_cols = [
-                m for m in members if any(k in m["column"].name.upper() for k in boolean_keywords)
-            ]
-
-            for col_info in date_cols:
-                issues.append(
-                    f"'{col_info['column'].name}' parece fecha pero es {col_info['column'].data_type}"
-                )
-                fixes.append("Fecha como texto: migrar a DATE")
-
-            for col_info in num_cols:
-                issues.append(
-                    f"'{col_info['column'].name}' parece numero pero es {col_info['column'].data_type}"
-                )
-                fixes.append("Numero como texto: migrar a NUMBER")
-
-            for col_info in bool_cols:
-                issues.append(
-                    f"'{col_info['column'].name}' parece booleano pero es {col_info['column'].data_type}"
-                )
-                fixes.append("Booleano como texto: unificar a CHAR(1) con CHECK")
-
-        if not issues:
-            issues.append(f"Tipo dominante: {dominant_type}")
-            fixes.append("Monitorear consistencia del cluster")
-
-        severity = (
-            "alta"
-            if any("Fecha como texto" in f or "Numero como texto" in f for f in fixes)
-            else "media"
-        )
+        col_groups = self._group_column_results(col_results)
+        table_groups = self._group_table_results(table_results)
 
         return {
-            "cluster_id": int(cluster_id),
-            "total_columns": total,
-            "tables_involved": sorted(set(tables)),
-            "dominant_type": dominant_type,
-            "pct_nullable": round(pct_nullable, 1),
-            "severity": severity,
-            "issues": issues,
-            "recommendations": fixes,
-            "columns": [
-                {"table": m["table"], "name": m["column"].name, "type": m["column"].data_type}
-                for m in members
-            ],
+            "column_issues": col_groups,
+            "table_issues": table_groups,
         }
 
+    def _group_column_results(
+        self, results: list[ClassificationResult]
+    ) -> list[dict[str, Any]]:
+        """Group column-level results by predicted label and data type."""
+        grouped = defaultdict(lambda: defaultdict(list))
+
+        for r in results:
+            # Map rule label to ground truth label
+            label = self._map_label(r.predicted_label)
+            grouped[label][r.method].append({
+                "column": r.column_name,
+                "table": r.table_name,
+                "confidence": r.confidence,
+                "explanation": r.explanation,
+            })
+
+        recommendations = []
+        for label, methods in grouped.items():
+            total_columns = sum(len(cols) for cols in methods.values())
+            all_columns = []
+            for cols in methods.values():
+                all_columns.extend([c["column"] for c in cols])
+
+            action = ANTI_PATTERN_ACTIONS.get(label, "Review and fix;")
+            severity = self._get_max_severity(results, label)
+
+            recommendations.append({
+                "label": label,
+                "total_columns": total_columns,
+                "columns": all_columns,
+                "severity": severity,
+                "action": action,
+                "details": methods,
+            })
+
+        return sorted(recommendations, key=lambda x: -x["total_columns"])
+
+    def _group_table_results(
+        self, results: list[ClassificationResult]
+    ) -> list[dict[str, Any]]:
+        """Group table-level results by predicted label."""
+        grouped = defaultdict(list)
+
+        for r in results:
+            label = self._map_label(r.predicted_label)
+            grouped[label].append({
+                "table": r.table_name,
+                "confidence": r.confidence,
+                "explanation": r.explanation,
+            })
+
+        recommendations = []
+        for label, tables in grouped.items():
+            table_names = [t["table"] for t in tables]
+            action = ANTI_PATTERN_ACTIONS.get(label, "Review and fix;")
+            severity = self._get_max_severity(results, label)
+
+            recommendations.append({
+                "label": label,
+                "total_tables": len(tables),
+                "tables": table_names,
+                "severity": severity,
+                "action": action,
+                "details": tables,
+            })
+
+        return sorted(recommendations, key=lambda x: -x["total_tables"])
+
+    def _map_label(self, rule_label: str) -> str:
+        """Map rule engine labels to ground truth labels."""
+        label_map = {
+            "date_as_text": "wrong_data_types",
+            "number_as_text": "wrong_data_types",
+            "bad_boolean": "self_contradictory",
+            "reserved_word": "reserved_words",
+            "impossible_data": "impossible_data",
+            "self_referencing": "self_referencing",
+            "polymorphic": "polymorphic",
+            "giant_table": "giant_table",
+            "eav_pattern": "eav",
+            "inconsistent_naming": "inconsistent_naming",
+        }
+        return label_map.get(rule_label, rule_label)
+
+    def _get_max_severity(
+        self, results: list[ClassificationResult], label: str
+    ) -> str:
+        """Get maximum severity for a given label."""
+        severity_map = {
+            Severity.HIGH: "alta",
+            Severity.MEDIUM: "media",
+            Severity.LOW: "baja",
+        }
+        for r in results:
+            if self._map_label(r.predicted_label) == label:
+                return severity_map.get(r.severity, "media")
+        return "media"
+
     @staticmethod
-    def print_recommendations(recommendations: list[dict[str, Any]]) -> str:
+    def print_recommendations(recommendations: dict[str, Any]) -> str:
         """Format recommendations as text.
 
         Delegates to RecommendationReporter for formatting.

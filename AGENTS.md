@@ -21,8 +21,8 @@ python3 anti_patterns.py  # Generate anti-pattern table catalog
 Run in order from `notebooks/` directory:
 1. `01_data_preparation.ipynb` — schema extraction + preprocessing + structural encoding
 2. `02_ml_embeddings.ipynb` — BERT embeddings + feature building + dimensionality reduction
-3. `03_clustering.ipynb` — clustering + ground truth comparison
-4. `04_analysis.ipynb` — evaluation + recommendations + visualization
+3. `03_classification.ipynb` — Rule Engine + ML Fallback
+4. `04_analysis.ipynb` — Classification metrics
 
 Each notebook saves intermediate data via pickle in `output/` for the next notebook.
 
@@ -61,8 +61,10 @@ Python modules live at the repo root (not in scripts/):
 Set `SKIP_BERT = True` in notebook 02 to use synthetic embeddings (avoids ~1.5GB download).
 
 Best known config (hardcoded in notebooks):
-- alpha=0.35, beta=0.15, gamma=0.50, delta=0.00
-- UMAP 5 components, KMeans 5 clusters
+- alpha=0.15, beta=0.35, gamma=0.45, delta=0.05
+- UMAP: n_components=5, n_neighbors=25, min_dist=0.05
+- Rule Engine: 10 categories, 80-90% coverage
+- One-Class SVM: nu=0.1 (fallback)
 
 ## Tests
 

@@ -461,6 +461,7 @@ def generate_poorly_designed_tables() -> list[AntiPatternTable]:
             no_primary_key=True,
             impossible_data=True,
             wrong_data_types=True,
+            polymorphic=True,
             check_constraints=[
                 "MONTO >= 0",
             ],
@@ -548,6 +549,7 @@ def generate_poorly_designed_tables() -> list[AntiPatternTable]:
             },
             no_primary_key=True,
             wrong_data_types=True,
+            self_contradictory=True,
         )
     )
 
@@ -601,6 +603,7 @@ def generate_poorly_designed_tables() -> list[AntiPatternTable]:
                 "FECHA_ACTUALIZACION": "VARCHAR2(30)",
             },
             no_primary_key=True,
+            wrong_data_types=True,
         )
     )
 
@@ -633,6 +636,7 @@ def generate_poorly_designed_tables() -> list[AntiPatternTable]:
             },
             no_primary_key=True,
             wrong_data_types=True,
+            polymorphic=True,
         )
     )
 

@@ -4,7 +4,7 @@ test_anomaly.py — Tests for anomaly.py module
 
 import numpy as np
 import pytest
-from anomaly import AnomalyDetector
+from anomaly import AnomalyDetector, OneClassAnalyzer
 
 
 class TestDetectionMetrics:
@@ -73,3 +73,69 @@ class TestCentroidScores:
         r99 = AnomalyDetector.centroid_scores(X, labels, percentile=99)
         assert r95["threshold"] <= r99["threshold"]
         assert r95["n_anomalies"] >= r99["n_anomalies"]
+
+
+class TestOneClassAnalyzer:
+    """Tests for OneClassAnalyzer ML-based anomaly detection."""
+
+    def test_fit_predict(self):
+        """Fit on clean data and predict returns correct shape."""
+        rng = np.random.RandomState(42)
+        X_clean = rng.randn(100, 5)
+        X_test = rng.randn(20, 5)
+
+        oc = OneClassAnalyzer(nu=0.1)
+        oc.fit(X_clean)
+        preds = oc.predict(X_test)
+
+        assert preds.shape == (20,)
+        assert set(np.unique(preds)).issubset({-1, 1})
+
+    def test_score_samples(self):
+        """score_samples returns correct shape and finite values."""
+        rng = np.random.RandomState(42)
+        X_clean = rng.randn(100, 5)
+        X_test = rng.randn(30, 5)
+
+        oc = OneClassAnalyzer(nu=0.1)
+        oc.fit(X_clean)
+        scores = oc.score_samples(X_test)
+
+        assert scores.shape == (30,)
+        assert np.all(np.isfinite(scores))
+
+    def test_anomaly_detection(self):
+        """Clean points should mostly be normal, outliers should be flagged."""
+        rng = np.random.RandomState(42)
+        X_clean = rng.randn(200, 5)
+        X_outliers = rng.uniform(10, 20, size=(20, 5))
+
+        oc = OneClassAnalyzer(nu=0.1)
+        oc.fit(X_clean)
+
+        preds_normal = oc.predict(X_clean[:50])
+        preds_outliers = oc.predict(X_outliers)
+
+        normal_ratio = (preds_normal == 1).mean()
+        outlier_ratio = (preds_outliers == -1).mean()
+
+        assert normal_ratio > 0.7
+        assert outlier_ratio > 0.5
+
+    def test_unfitted_raises(self):
+        """Calling predict/score before fit raises RuntimeError."""
+        oc = OneClassAnalyzer()
+        X = np.random.randn(10, 5)
+
+        with pytest.raises(RuntimeError):
+            oc.predict(X)
+        with pytest.raises(RuntimeError):
+            oc.score_samples(X)
+
+    def test_custom_params(self):
+        """Custom kernel/nu/gamma are accepted."""
+        X = np.random.randn(50, 3)
+        oc = OneClassAnalyzer(nu=0.2, kernel="linear", gamma="auto")
+        oc.fit(X)
+        preds = oc.predict(X[:10])
+        assert preds.shape == (10,)

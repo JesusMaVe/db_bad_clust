@@ -7,13 +7,19 @@ Purpose:
   - Noise detection: Points labeled as -1 by density-based algorithms
   - Centroid distance: Points far from cluster centroids
   - Precision/Recall/F1: Compare predicted anomalies against ground truth
+  - One-class SVM: ML-based anomaly detection as fallback
 
 Usage:
-  from anomaly import AnomalyDetector
+  from anomaly import AnomalyDetector, OneClassAnalyzer
 
   detector = AnomalyDetector()
   metrics = detector.detection_metrics(labels_pred, labels_true)
   scores = detector.centroid_scores(X, labels)
+
+  oc = OneClassAnalyzer(nu=0.1, kernel='rbf', gamma='scale')
+  oc.fit(X_clean)
+  predictions = oc.predict(X_new)
+  scores = oc.score_samples(X_new)
 """
 
 from __future__ import annotations
@@ -22,6 +28,7 @@ import logging
 from typing import Any
 
 import numpy as np
+from sklearn.svm import OneClassSVM
 
 logger = logging.getLogger(__name__)
 
@@ -103,6 +110,8 @@ class AnomalyDetector:
                 "n_anomalies": 0,
                 "mean_distance": 0.0,
                 "std_distance": 0.0,
+                "threshold": 0.0,
+                "percentile": float(percentile),
             }
 
         # Vectorized centroid computation
@@ -128,3 +137,72 @@ class AnomalyDetector:
             "threshold": float(threshold),
             "percentile": float(percentile),
         }
+
+
+class OneClassAnalyzer:
+    """ML-based anomaly detection using One-Class SVM.
+
+    Provides a fallback method for detecting anomalous columns
+    when density-based noise detection is unavailable.
+
+    Args:
+        nu: Upper bound on fraction of outliers (default 0.1).
+        kernel: SVM kernel type (default 'rbf').
+        gamma: Kernel coefficient (default 'scale').
+    """
+
+    def __init__(
+        self,
+        nu: float = 0.1,
+        kernel: str = "rbf",
+        gamma: str = "scale",
+    ) -> None:
+        self.nu = nu
+        self.kernel = kernel
+        self.gamma = gamma
+        self._model: OneClassSVM | None = None
+
+    def fit(self, X: np.ndarray) -> OneClassAnalyzer:
+        """Fit the One-Class SVM on clean data.
+
+        Args:
+            X: Feature matrix of shape (n_samples, n_features).
+
+        Returns:
+            self
+        """
+        self._model = OneClassSVM(
+            nu=self.nu,
+            kernel=self.kernel,
+            gamma=self.gamma,
+        )
+        self._model.fit(X)
+        return self
+
+    def predict(self, X: np.ndarray) -> np.ndarray:
+        """Predict whether each sample is normal (1) or anomalous (-1).
+
+        Args:
+            X: Feature matrix of shape (n_samples, n_features).
+
+        Returns:
+            Array of shape (n_samples,) with values 1 (normal) or -1 (anomaly).
+        """
+        if self._model is None:
+            raise RuntimeError("Model not fitted. Call fit() first.")
+        return self._model.predict(X)
+
+    def score_samples(self, X: np.ndarray) -> np.ndarray:
+        """Return anomaly scores for each sample.
+
+        Lower scores indicate more anomalous points.
+
+        Args:
+            X: Feature matrix of shape (n_samples, n_features).
+
+        Returns:
+            Array of shape (n_samples,) with anomaly scores.
+        """
+        if self._model is None:
+            raise RuntimeError("Model not fitted. Call fit() first.")
+        return self._model.score_samples(X)
