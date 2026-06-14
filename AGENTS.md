@@ -1,99 +1,71 @@
 # AGENTS.md — db_bad_clust (ml_bad_db_trainer)
 
-**Status: Phase 1 (COMPLETE) → Phase 2 (COMPLETE) → Phase 3 (COMPLETE)**
+**Status: Phase 1 (COMPLETE) → Phase 2 (COMPLETE) → Phase 3 (COMPLETE) → Notebooks (CURRENT)**
 
-## Setup & run
+## Setup
 
 ```bash
 source .venv/bin/activate
 pip install -r requirements.txt
+```
 
-# Phase 1 — start Oracle, generate 23 bad-schema tables, insert dirty data:
+## Phase 1 — Oracle DB Generation (scripts/)
+
+```bash
 docker compose up -d
-cd scripts && python3 orchestrator.py          # FAILS if run from repo root
-
-# Phase 2 — ML pipeline over extracted schemas:
-cd scripts && python3 phase2_orchestrator.py --tune
-# Tests run from repo root (no DB needed, mocks):
-cd .. && python3 -m pytest tests/ -v
+python3 anti_patterns.py  # Generate anti-pattern table catalog
 ```
 
-## Gotchas (agent will miss these)
+## Phase 2/3 — ML Pipeline (Notebooks)
 
-- **Must `cd scripts`** before running orchestrator — `OracleConnector(config_path="../config.yaml")` is relative to CWD. Running from repo root crashes.
-- **Two entrypoints**: `orchestrator.py` (Phase 1: generate Oracle) and `phase2_orchestrator.py` (Phase 2: ML pipeline). Both do `sys.path.insert(0, ...)` at the top.
-- **`config.yaml` says `tables_count: 10`** — stale comment. Actual count is 23 hardcoded in `anti_patterns.py`.
-- **`random` has no seed** — every run produces different data. Tests use mocks so they're deterministic.
-- **Oracle 23c**: `bad_schema` user pre-created via `APP_USER` env var in `docker-compose.yml`. Healthcheck takes ~30s.
-- **Table names are case-sensitive** — DDL creates unquoted (`CREATE TABLE EMPLEADOS`), but DROP/verification uses quoted (`DROP TABLE "EMPLEADOS"`). Always double-quote table names.
-- **pandoc+pdflatex + Unicode** — box-drawing chars (U+251C etc.) crash. Use only ASCII in `docs/phase2/*.md`.
-- **BERT downloads `bert-base-multilingual-cased`** on first run (~1.5GB). Use `--skip-bert` to bypass.
+Run in order from `notebooks/` directory:
+1. `01_data_preparation.ipynb` — schema extraction + preprocessing + structural encoding
+2. `02_ml_embeddings.ipynb` — BERT embeddings + feature building + dimensionality reduction
+3. `03_clustering.ipynb` — clustering + ground truth comparison
+4. `04_analysis.ipynb` — evaluation + recommendations + visualization
 
-## DDL quirks
+Each notebook saves intermediate data via pickle in `output/` for the next notebook.
 
-- CHECK constraints created `DISABLE` — exist in `user_constraints` but never validate.
-- FK to a table without PK fails silently; FK with `DISABLE` creates a disabled constraint.
-- Redundant indexes (same column list) produce `ORA-01408` logged as warning — expected.
-- Types LONG/LONG RAW removed in Oracle 23c — table DATOS_MAESTROS fails to create entirely (this IS the anti-pattern).
+## Module Files (root)
 
-## Code quality
+Python modules live at the repo root (not in scripts/):
+- `db_connector.py` — Oracle connection
+- `schema_extractor.py` — metadata extraction from Oracle
+- `text_preprocessor.py` — column name preprocessing for BERT
+- `structural_encoder.py` — data type + constraint encoding
+- `bert_embedder.py` — BERT embedding generation
+- `feature_builder.py` — composite vector construction
+- `dimensionality_reducer.py` — PCA/UMAP/t-SNE/SVD
+- `cluster_engine.py` — KMeans/DBSCAN/HDBSCAN/Agglomerative/MeanShift
+- `evaluator.py` — clustering quality metrics
+- `recommender.py` — anti-pattern recommendations
+- `ground_truth.py` — anti-pattern ground truth mapping
+- `anti_patterns.py` — table catalog (1430 lines, data-only)
+- `exceptions.py` — exception hierarchy
+
+## Configuration
+
+Set `SKIP_BERT = True` in notebook 02 to use synthetic embeddings (avoids ~1.5GB download).
+
+Best known config (hardcoded in notebooks):
+- alpha=0.35, beta=0.15, gamma=0.50, delta=0.00
+- UMAP 5 components, KMeans 5 clusters
+
+## Tests
 
 ```bash
-ruff check scripts/         # 0 errors (config in pyproject.toml)
-ruff format scripts/        # max 100 cols, double quotes
-python3 -m pytest tests/ -v # 364 tests, no DB required
+python3 -m pytest tests/ -v   # 364 tests, no DB required
 ```
 
-- **Exceptions**: custom hierarchy `scripts/exceptions.py` — `BadDBError` base → `DatabaseError`, `SchemaError`, `EmbeddingError`, `ClusteringError`, `ConfigError`, `VisualizationError`, `GenerationError`. No bare `except Exception`.
-- **Type hints**: 100% across all scripts.
-- **Developer manual**: `DEVELOPER.md` (type conventions, exception rules, tuning guide).
+## Gotchas
 
-## Phase 3 CLI (Phase 2 + Phase 3)
-
-```
---skip-bert       Use synthetic embeddings (skip BERT download)
---method          pca | umap | svd | tsne
---n-components    Target dims (default: auto, 80% variance)
---n-clusters      Cluster count (default: auto via silhouette)
---cluster-method  kmeans | dbscan | agglomerative | meanshift
---metric          euclidean | cosine (DBSCAN, default euclidean)
---dbscan-eps      DBSCAN eps value (default 0.5, use 'auto' for k-distance)
---dbscan-min-pts  DBSCAN min_samples (default: auto, 5% of data)
---validate        Validate clustering against anti-pattern ground truth
---alpha           BERT weight (default 0.40)
---beta            Type weight (default 0.30)
---gamma           Constraint weight (default 0.25)
---delta           data_length weight (default 0.05, best=0.00)
---tune            Grid search 360 combos (~2s extra, best known: 0.35/0.15/0.50/0.00)
---output-dir      Path for plots/reports (default: ../output/run_<ts>)
-```
-
-## Oracle diagnostics
-
-```bash
-docker compose exec oracle sqlplus bad_schema/bad_schema_pass@FREEPDB1
-```
-
-```sql
-SELECT table_name FROM user_tables ORDER BY table_name;
-DESC "EMPLEADOS";
-SELECT * FROM "EMPLEADOS" WHERE ROWNUM <= 3;
--- Constraints (includes DISABLE, FK, CHECK)
-SELECT constraint_name, constraint_type, table_name, status, search_condition
-  FROM user_constraints ORDER BY table_name, constraint_type;
--- Indexes (includes redundant)
-SELECT index_name, table_name, column_name, column_position
-  FROM user_ind_columns ORDER BY table_name, index_name, column_position;
--- FK metadata
-SELECT constraint_name, table_name, r_constraint_name
-  FROM user_constraints WHERE constraint_type = 'R' ORDER BY table_name;
--- Column types & nullability
-SELECT table_name, column_name, data_type, data_length, nullable
-  FROM user_tab_columns ORDER BY table_name, column_id;
-```
+- Notebooks use `sys.path.insert(0, str(Path.cwd().parent))` to import root modules
+- BERT downloads ~1.5GB on first run — use `SKIP_BERT=True`
+- Table names case-sensitive — always double-quote
+- Oracle 23c healthcheck takes ~30s
+- `config.yaml` says `tables_count:10` but actual count is 23
 
 ## Reference
 
 - `docs/phase2/00_anti_patterns_catalog.md` — anti-pattern catalog
-- `docs/phase2/11_completion_report.md` — Phase 2 results & findings
-- `DEVELOPER.md` — code standards, testing, tuning
+- `docs/phase2/11_completion_report.md` — Phase 2 results
