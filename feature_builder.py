@@ -15,7 +15,7 @@ Purpose:
 Usage:
   builder = FeatureBuilder(alpha=0.60, beta=0.15, gamma=0.15)
   phi = builder.build(e_text, e_type, e_rest)
-  # → numpy array shape (N, 768 + 12 + 5)
+  # → numpy array shape (N, e_text_dim + 12 + 5)
 """
 
 from __future__ import annotations
@@ -75,13 +75,13 @@ class FeatureBuilder:
         Build the composite vector φ(aⱼ).
 
         Args:
-            e_text: BERT embeddings           shape (N, 768)
+            e_text: Text embeddings           shape (N, d_text)
             e_type: One-hot types              shape (N, n_types)
             e_rest: Binary constraints         shape (N, 5)
             e_stat: Statistical (optional)     shape (N, s)
 
         Returns:
-            numpy array shape (N, d) where d = 768 + n_types + 5 + (s or 0)
+            numpy array shape (N, d) where d = d_text + n_types + 5 + (s or 0)
         """
         assert e_text.shape[0] == e_type.shape[0] == e_rest.shape[0], (
             "All matrices must have the same number of rows"

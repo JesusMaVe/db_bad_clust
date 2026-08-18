@@ -1,15 +1,21 @@
 """
-bert_embedder.py — BERT embedding generation for database column names.
+bert_embedder.py — Sentence embedding generation for database column names.
 
-Generates dense ℝ⁷⁶⁸ vectors for each column using
-bert-base-multilingual-cased from Hugging Face. Takes preprocessed
-text (via TextPreprocessor) and extracts the [CLS] token from the
-last hidden layer.
+Generates dense vectors (ℝ³⁸⁴) for each column using
+sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2 from
+Hugging Face. Takes preprocessed text (via TextPreprocessor) and
+computes mean pooling over the last hidden layer (attention-mask
+weighted), followed by L2 normalization.
+
+Why not bert-base-multilingual-cased + [CLS]: the SBERT paper
+(arXiv:1908.10084) shows raw BERT [CLS] vectors are unsuitable for
+unsupervised similarity/clustering (29.19 vs 74.89 Spearman on STS).
+This model is trained for clustering/semantic search with mean pooling.
 
 Usage:
     embedder = BERTEmbedder()
     vectors = embedder.encode(["employees: date of birth", ...])
-    # → numpy array shape (N, 768)
+    # → numpy array shape (N, 384)
 """
 
 from __future__ import annotations
@@ -19,10 +25,11 @@ import logging
 from typing import TYPE_CHECKING, Protocol
 
 import numpy as np
+
 from exceptions import EmbeddingError
 
 if TYPE_CHECKING:
-    from transformers import AutoModel, AutoTokenizer
+    pass
 
 logger = logging.getLogger(__name__)
 
@@ -50,23 +57,23 @@ class Model(Protocol):
 
 
 class BERTEmbedder:
-    """Generates BERT embeddings for database attribute texts.
+    """Generates sentence embeddings for database attribute texts.
 
     Caches the model in memory to avoid reloading on successive calls.
 
     Args:
         model_name: Hugging Face model identifier.
         device: "auto" (CPU/MPS/CUDA), "cpu", "cuda", or "mps".
-        max_length: Maximum token count per text (short names → 32).
+        max_length: Maximum token count per text (model max is 128).
         tokenizer: Optional pre-loaded tokenizer (for testing/DI).
         model: Optional pre-loaded model (for testing/DI).
     """
 
     def __init__(
         self,
-        model_name: str = "bert-base-multilingual-cased",
+        model_name: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
         device: str = "auto",
-        max_length: int = 32,
+        max_length: int = 128,
         tokenizer: Tokenizer | None = None,
         model: Model | None = None,
     ) -> None:
@@ -126,7 +133,7 @@ class BERTEmbedder:
 
     @property
     def embedding_dim(self) -> int:
-        """Return the embedding dimension (768 for bert-base)."""
+        """Return the embedding dimension (384 for MiniLM-L12)."""
         self._load_model()
         return int(self._model.config.hidden_size)
 
@@ -173,8 +180,16 @@ class BERTEmbedder:
                 with torch.no_grad():
                     inputs = {k: v.to(self._device) for k, v in inputs.items()}
                     outputs = self._model(**inputs)  # type: ignore[misc]
-                    cls_vectors = outputs.last_hidden_state[:, 0, :].cpu().numpy()
-                    all_embeddings.append(cls_vectors)
+                    # Mean pooling: weight token embeddings by attention mask
+                    token_embeddings = outputs.last_hidden_state
+                    mask = inputs["attention_mask"]
+                    mask_expanded = mask.unsqueeze(-1).expand(token_embeddings.size()).float()
+                    summed = torch.sum(token_embeddings * mask_expanded, dim=1)
+                    counts = torch.clamp(mask_expanded.sum(dim=1), min=1e-9)
+                    mean_vectors = summed / counts
+                    # L2 normalize so cosine similarity == dot product
+                    mean_vectors = torch.nn.functional.normalize(mean_vectors, p=2, dim=1)
+                    all_embeddings.append(mean_vectors.cpu().numpy())
 
             return np.concatenate(all_embeddings, axis=0).astype(np.float32)
         except Exception as e:

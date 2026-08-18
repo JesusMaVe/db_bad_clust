@@ -13,7 +13,8 @@ pip install -r requirements.txt
 
 ```bash
 docker compose up -d
-python3 anti_patterns.py  # Generate anti-pattern table catalog
+python3 anti_patterns.py   # Generate anti-pattern table catalog
+python3 apply_comments.py  # Apply documentation overlay (comments) to the DB
 ```
 
 ## Phase 2/3 — ML Pipeline (Notebooks)
@@ -32,10 +33,11 @@ Python modules live at the repo root (not in scripts/):
 
 ### Data Pipeline
 - `db_connector.py` — Oracle connection
-- `schema_extractor.py` — metadata extraction from Oracle
-- `text_preprocessor.py` — column name preprocessing for BERT
+- `schema_extractor.py` — metadata extraction from Oracle (bulk queries: one per dictionary view, incl. comments/identity/virtual columns)
+- `apply_comments.py` — applies the documentation overlay (TABLE_COMMENTS/COLUMN_COMMENTS in anti_patterns.py) to the DB
+- `text_preprocessor.py` — column name preprocessing for BERT (appends column comments; lowercases only ALL-CAPS tokens)
 - `structural_encoder.py` — data type + constraint encoding
-- `bert_embedder.py` — BERT embedding generation (supports DI for testing)
+- `bert_embedder.py` — sentence embeddings via paraphrase-multilingual-MiniLM-L12-v2 (mean pooling + L2 norm, 384 dims)
 - `feature_builder.py` — composite vector construction
 
 ### ML Pipeline
@@ -58,7 +60,7 @@ Python modules live at the repo root (not in scripts/):
 
 ## Configuration
 
-Set `SKIP_BERT = True` in notebook 02 to use synthetic embeddings (avoids ~1.5GB download).
+Set `SKIP_BERT = True` in notebook 02 to use synthetic embeddings (avoids ~470MB download).
 
 Best known config (hardcoded in notebooks):
 - alpha=0.15, beta=0.35, gamma=0.45, delta=0.05
@@ -69,7 +71,7 @@ Best known config (hardcoded in notebooks):
 ## Tests
 
 ```bash
-python3 -m pytest tests/ -v   # 396 tests, no DB required
+python3 -m pytest tests/ -v   # 446 tests, no DB required
 ```
 
 ## Gotchas

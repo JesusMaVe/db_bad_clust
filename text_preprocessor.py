@@ -9,8 +9,10 @@ Purpose:
     1. Split camelCase / snake_case / UPPER_CASE
     2. Expand common abbreviations (ID → identifier, FK → foreign key, etc.)
     3. Remove redundant prefixes (tbl_, col_, fld_)
-    4. Lowercase and collapse whitespace
+    4. Lowercase only ALL-CAPS tokens (Oracle convention); keep mixed-case
+       tokens as-is because the embedding model is case-sensitive
     5. Contextualize with table name → "customers: customer name"
+    6. Append the column comment verbatim (natural language, if any)
 
 Usage:
   preprocessor = TextPreprocessor()
@@ -127,13 +129,20 @@ class TextPreprocessor:
 
     # ── Full pipeline ─────────────────────────────────────────────────
 
-    def process(self, column_name: str, table_name: str | None = None) -> str:
+    def process(
+        self,
+        column_name: str,
+        table_name: str | None = None,
+        comment: str | None = None,
+    ) -> str:
         """
         Apply the full preprocessing pipeline.
 
         Args:
             column_name: Column name (e.g. "FECHA_NACIMIENTO").
             table_name: Container table name (e.g. "EMPLEADOS").
+            comment: Column comment from the data dictionary, appended
+                verbatim (already natural language).
 
         Returns:
             Clean, contextualized text (e.g. "empleados: fecha nacimiento").
@@ -153,13 +162,20 @@ class TextPreprocessor:
         tokens = text.split()
         tokens = [self._expand_token(t) for t in tokens]
 
-        # 5. Collapse whitespace and lowercase
-        text = " ".join(tokens).lower().strip()
+        # 5. Collapse whitespace; lowercase only ALL-CAPS tokens.
+        #    Oracle stores unquoted identifiers as uppercase — normalizing
+        #    them avoids WordPiece char-fragmentation — while mixed-case
+        #    tokens (camelCase remnants) carry signal for cased models.
+        text = " ".join(t.lower() if t.isupper() else t for t in tokens).strip()
 
         # 6. Contextualize with table name
         if table_name:
             table_clean = self.process(table_name)
             text = f"{table_clean}: {text}"
+
+        # 7. Append column comment verbatim
+        if comment and comment.strip():
+            text = f"{text} | {comment.strip()}"
 
         return text
 

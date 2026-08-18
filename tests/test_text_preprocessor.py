@@ -17,8 +17,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 
 import pytest
-from text_preprocessor import TextPreprocessor, preprocess
 
+from text_preprocessor import TextPreprocessor, preprocess
 
 # ── Fixture ─────────────────────────────────────────────────────────────
 
@@ -124,16 +124,11 @@ class TestPrefixRemoval:
         self, preprocessor: TextPreprocessor, input_text: str, expected: str
     ) -> None:
         """Known prefixes (tbl, col, fld, tab) should be stripped."""
-        # Replace underscores with spaces because _split_on_underscores
-        # runs before _remove_redundant_prefixes in the pipeline.
+        # _remove_redundant_prefixes runs after _split_on_underscores,
+        # so simulate the post-split input here.
         text = input_text.replace("_", " ")
         result = preprocessor._remove_redundant_prefixes(text)
-        # The result will be space-separated; collapse for comparison
-        result_normalized = result.replace(" ", "_")
-        expected_normalized = expected.replace(" ", "_")
-        # Actually, let's just test the core behavior by passing
-        # space-delimited tokens that simulate post-underscore-split
-        pass
+        assert result.strip() == expected.replace("_", " ")
 
     def test_prefix_tbl(self, preprocessor: TextPreprocessor) -> None:
         """'tbl employees' → 'employees'."""
@@ -222,9 +217,9 @@ class TestFullPipeline:
         assert result == "fecha nacimiento"
 
     def test_camel_case_column(self, preprocessor: TextPreprocessor) -> None:
-        """fechaNacimiento → fecha nacimiento (no table context)."""
+        """fechaNacimiento → fecha Nacimiento (mixed case preserved)."""
         result = preprocessor.process("fechaNacimiento")
-        assert result == "fecha nacimiento"
+        assert result == "fecha Nacimiento"
 
     def test_with_table_context(self, preprocessor: TextPreprocessor) -> None:
         """FECHA_NACIMIENTO with table EMPLEADOS → empleados: fecha nacimiento."""
@@ -269,6 +264,53 @@ class TestFullPipeline:
         assert result == "identifier"
 
 
+# ── Comment appending ───────────────────────────────────────────────────
+
+
+class TestCommentAppending:
+    """Verify comments are appended verbatim to the embedding text."""
+
+    def test_comment_appended(self, preprocessor: TextPreprocessor) -> None:
+        """Comment is appended after the contextualized name."""
+        result = preprocessor.process(
+            "EMAIL",
+            table_name="EMPLEADOS",
+            comment="Correo corporativo del empleado.",
+        )
+        assert result == "empleados: email | Correo corporativo del empleado."
+
+    def test_comment_keeps_its_case(self, preprocessor: TextPreprocessor) -> None:
+        """Natural-language comments are not case-normalized."""
+        result = preprocessor.process("SALARIO", comment="Salario bruto anual en euros.")
+        assert "Salario bruto anual en euros." in result
+
+    def test_no_comment_unchanged(self, preprocessor: TextPreprocessor) -> None:
+        """None or empty comment leaves the text unchanged."""
+        assert preprocessor.process("SALARIO") == "salario"
+        assert preprocessor.process("SALARIO", comment=None) == "salario"
+        assert preprocessor.process("SALARIO", comment="   ") == "salario"
+
+
+# ── Smart lowercasing ───────────────────────────────────────────────────
+
+
+class TestSmartLowercasing:
+    """Verify only ALL-CAPS tokens are lowercased (Oracle convention)."""
+
+    def test_all_caps_token_lowercased(self, preprocessor: TextPreprocessor) -> None:
+        """ALL-CAPS (Oracle default) → lowercase to avoid WordPiece fragmentation."""
+        assert preprocessor.process("FECHA_NACIMIENTO") == "fecha nacimiento"
+
+    def test_mixed_case_token_preserved(self, preprocessor: TextPreprocessor) -> None:
+        """Mixed-case tokens (camelCase remnants) keep their case."""
+        assert preprocessor.process("fechaNacimiento") == "fecha Nacimiento"
+
+    def test_acronym_case_distinction_preserved(self, preprocessor: TextPreprocessor) -> None:
+        """'Depto' vs 'DEPTO' are distinguishable after preprocessing."""
+        assert "Depto" in preprocessor.process("DeptoId")
+        assert "depto" in preprocessor.process("DEPTO_ID")
+
+
 # ── Batch processing ────────────────────────────────────────────────────
 
 
@@ -301,8 +343,10 @@ class TestBatchProcessing:
         columns = ["FECHA_NACIMIENTO", "tbl_employees", "fkDeptoId"]
         results = preprocessor.process_batch(columns)
         assert len(results) == 3
-        # Each result is lowercased
-        assert all(r.islower() or ":" in r for r in results)
+        # ALL-CAPS tokens are lowercased; mixed-case tokens keep their case
+        assert results[0] == "fecha nacimiento"
+        assert results[1] == "employees"
+        assert results[2] == "foreign key Depto identifier"
 
 
 # ── Quick access function ──────────────────────────────────────────────

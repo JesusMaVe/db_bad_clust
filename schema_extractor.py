@@ -11,11 +11,12 @@ Purpose:
 
 Flow:
   1. Connect to Oracle (reuses OracleConnector)
-  2. Query data dictionary views:
+  2. Query data dictionary views (one bulk query per view):
      - user_tables
-     - user_tab_columns
+     - user_tab_cols (includes hidden/virtual/identity columns)
      - user_constraints / user_cons_columns
      - user_ind_columns
+     - user_tab_comments / user_col_comments
   3. Populate nested dataclasses: DatabaseSchema -> TableMetadata -> ColumnMetadata
   4. Serialize to dict/JSON for consumption by other modules
 
@@ -33,6 +34,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any
 
 import oracledb
+
 from exceptions import SchemaError
 
 logger = logging.getLogger(__name__)
@@ -62,6 +64,8 @@ class ColumnMetadata:
     fk_name: str | None = None
     default_value: str | None = None
     comments: str | None = None
+    is_identity: bool = False
+    is_virtual: bool = False
 
 
 @dataclass
@@ -103,7 +107,11 @@ class SchemaExtractor:
     Extracts schema metadata from an Oracle database.
 
     Queries the data dictionary views for the current user to build
-    a complete DatabaseSchema with column types, constraints, and indexes.
+    a complete DatabaseSchema with column types, constraints, indexes,
+    and comments.
+
+    Uses one bulk query per dictionary view (no per-table N+1): the
+    same pattern as professional catalog tools like DataHub.
     """
 
     def __init__(self, connection: oracledb.Connection) -> None:
@@ -124,14 +132,24 @@ class SchemaExtractor:
         """
         try:
             table_names = self._get_table_names()
-            tables: list[TableMetadata] = []
+            if not table_names:
+                return DatabaseSchema(tables=[])
 
+            columns_by_table = self._get_all_columns()
+            pk_by_table = self._get_all_constraints("P")
+            unique_by_table = self._get_all_constraints("U")
+            fk_by_table = self._get_all_foreign_keys()
+            indexed_by_table = self._get_all_indexed_columns()
+            table_comments = self._get_table_comments()
+            col_comments = self._get_column_comments()
+
+            tables: list[TableMetadata] = []
             for tname in table_names:
-                columns = self._get_columns(tname)
-                pk_cols = self._get_primary_key_columns(tname)
-                fk_info = self._get_foreign_keys(tname)
-                unique_cols = self._get_unique_columns(tname)
-                indexed_cols = self._get_indexed_columns(tname)
+                columns = columns_by_table.get(tname, [])
+                pk_cols = pk_by_table.get(tname, set())
+                unique_cols = unique_by_table.get(tname, set())
+                fk_info = fk_by_table.get(tname, {})
+                indexed_cols = indexed_by_table.get(tname, set())
 
                 for col in columns:
                     col.is_primary_key = col.name in pk_cols
@@ -143,8 +161,15 @@ class SchemaExtractor:
                         col.fk_name = ref["fk_name"]
                     col.is_unique = col.name in unique_cols
                     col.is_indexed = col.name in indexed_cols
+                    col.comments = col_comments.get((tname, col.name))
 
-                tables.append(TableMetadata(name=tname, columns=columns))
+                tables.append(
+                    TableMetadata(
+                        name=tname,
+                        columns=columns,
+                        table_comment=table_comments.get(tname),
+                    )
+                )
 
             logger.info(
                 "Schema extracted: %d tables, %d columns",
@@ -155,72 +180,75 @@ class SchemaExtractor:
         except oracledb.Error as exc:
             raise SchemaError(f"Failed to extract schema: {exc}") from exc
 
-    # ── Data dictionary queries ────────────────────────────────────────
+    # ── Bulk data dictionary queries (one per view, grouped in Python) ─
 
     def _get_table_names(self) -> list[str]:
         """Return table names for the current user."""
         self.cursor.execute("SELECT table_name FROM user_tables ORDER BY table_name")
         return [row[0] for row in self.cursor.fetchall()]
 
-    def _get_columns(self, table_name: str) -> list[ColumnMetadata]:
-        """
-        Return columns for a table with type, nullability, and length.
+    def _get_all_columns(self) -> dict[str, list[ColumnMetadata]]:
+        """Return columns for all tables, grouped by table name.
+
+        Uses user_tab_cols (not user_tab_columns) to also see hidden and
+        virtual columns, plus identity flags — as DataHub does.
         """
         self.cursor.execute(
             """
             SELECT
+                table_name,
                 column_name,
                 data_type,
                 nullable,
                 data_length,
                 data_precision,
                 data_scale,
-                data_default
-            FROM user_tab_columns
-            WHERE table_name = :table_name
-            ORDER BY column_id
-            """,
-            table_name=table_name,
+                data_default,
+                identity_column,
+                virtual_column
+            FROM user_tab_cols
+            ORDER BY table_name, column_id
+            """
         )
-        columns: list[ColumnMetadata] = []
+        result: dict[str, list[ColumnMetadata]] = {}
         for row in self.cursor.fetchall():
             col = ColumnMetadata(
-                name=row[0],
-                data_type=row[1],
-                nullable=(row[2] == "Y"),
-                data_length=row[3],
-                data_precision=row[4],
-                data_scale=row[5],
-                default_value=row[6],
+                name=row[1],
+                data_type=row[2],
+                nullable=(row[3] == "Y"),
+                data_length=row[4],
+                data_precision=row[5],
+                data_scale=row[6],
+                default_value=row[7],
+                is_identity=(row[8] == "YES"),
+                is_virtual=(row[9] == "YES"),
             )
-            columns.append(col)
-        return columns
+            result.setdefault(row[0], []).append(col)
+        return result
 
-    def _get_primary_key_columns(self, table_name: str) -> set[str]:
-        """
-        Return the set of column names that form the primary key.
-        """
+    def _get_all_constraints(self, constraint_type: str) -> dict[str, set[str]]:
+        """Return {table_name -> {column_name}} for PK or UNIQUE constraints."""
         self.cursor.execute(
             """
-            SELECT cc.column_name
+            SELECT c.table_name, cc.column_name
             FROM user_constraints c
             JOIN user_cons_columns cc
               ON c.constraint_name = cc.constraint_name
-            WHERE c.table_name = :table_name
-              AND c.constraint_type = 'P'
+            WHERE c.constraint_type = :ctype
             """,
-            table_name=table_name,
+            ctype=constraint_type,
         )
-        return {row[0] for row in self.cursor.fetchall()}
+        result: dict[str, set[str]] = {}
+        for table_name, column_name in self.cursor.fetchall():
+            result.setdefault(table_name, set()).add(column_name)
+        return result
 
-    def _get_foreign_keys(self, table_name: str) -> dict[str, dict[str, str]]:
-        """
-        Return a dict {col_name -> {ref_table, ref_column, fk_name}}
-        for columns that are foreign keys.
-        """
+    def _get_all_foreign_keys(self) -> dict[str, dict[str, dict[str, str]]]:
+        """Return {table_name -> {col_name -> {ref_table, ref_column, fk_name}}}."""
         self.cursor.execute(
             """
             SELECT
+                c.table_name,
                 cc.column_name,
                 c2.table_name  AS ref_table,
                 cc2.column_name AS ref_column,
@@ -233,50 +261,49 @@ class SchemaExtractor:
             JOIN user_cons_columns cc2
               ON c2.constraint_name = cc2.constraint_name
              AND cc2.position = cc.position
-            WHERE c.table_name = :table_name
-              AND c.constraint_type = 'R'
-            """,
-            table_name=table_name,
+            WHERE c.constraint_type = 'R'
+            """
         )
-        fk_map: dict[str, dict[str, str]] = {}
-        for row in self.cursor.fetchall():
-            fk_map[row[0]] = {
-                "ref_table": row[1],
-                "ref_column": row[2],
-                "fk_name": row[3],
+        result: dict[str, dict[str, dict[str, str]]] = {}
+        for table_name, col_name, ref_table, ref_column, fk_name in self.cursor.fetchall():
+            result.setdefault(table_name, {})[col_name] = {
+                "ref_table": ref_table,
+                "ref_column": ref_column,
+                "fk_name": fk_name,
             }
-        return fk_map
+        return result
 
-    def _get_unique_columns(self, table_name: str) -> set[str]:
-        """
-        Return the set of columns with a UNIQUE constraint.
-        """
+    def _get_all_indexed_columns(self) -> dict[str, set[str]]:
+        """Return {table_name -> {column_name}} for indexed columns."""
+        self.cursor.execute(
+            "SELECT table_name, column_name FROM user_ind_columns"
+        )
+        result: dict[str, set[str]] = {}
+        for table_name, column_name in self.cursor.fetchall():
+            result.setdefault(table_name, set()).add(column_name)
+        return result
+
+    def _get_table_comments(self) -> dict[str, str]:
+        """Return {table_name -> comment} for tables that have one."""
         self.cursor.execute(
             """
-            SELECT cc.column_name
-            FROM user_constraints c
-            JOIN user_cons_columns cc
-              ON c.constraint_name = cc.constraint_name
-            WHERE c.table_name = :table_name
-              AND c.constraint_type = 'U'
-            """,
-            table_name=table_name,
+            SELECT table_name, comments
+            FROM user_tab_comments
+            WHERE comments IS NOT NULL
+            """
         )
-        return {row[0] for row in self.cursor.fetchall()}
+        return {row[0]: row[1] for row in self.cursor.fetchall()}
 
-    def _get_indexed_columns(self, table_name: str) -> set[str]:
-        """
-        Return the set of columns that have an index.
-        """
+    def _get_column_comments(self) -> dict[tuple[str, str], str]:
+        """Return {(table_name, column_name) -> comment} for commented columns."""
         self.cursor.execute(
             """
-            SELECT column_name
-            FROM user_ind_columns
-            WHERE table_name = :table_name
-            """,
-            table_name=table_name,
+            SELECT table_name, column_name, comments
+            FROM user_col_comments
+            WHERE comments IS NOT NULL
+            """
         )
-        return {row[0] for row in self.cursor.fetchall()}
+        return {(row[0], row[1]): row[2] for row in self.cursor.fetchall()}
 
     # ── Utility ────────────────────────────────────────────────────────
 
