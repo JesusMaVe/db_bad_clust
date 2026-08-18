@@ -127,6 +127,61 @@ beta (type) = 0.15 optimo. El tipo de dato ayuda moderadamente.
 
 ---
 
+## 4-bis. Re-validacion con embeddings reales (agosto 2026, issue #1)
+
+Tras el cambio a `paraphrase-multilingual-MiniLM-L12-v2` (mean pooling, 384D)
++ comentarios de columnas en el texto, se re-corrio la comparativa con un
+protocolo documentado y reproducible: 6 configuraciones de pesos x {UMAP, PCA}
+x {5D, 20D} x 5 algoritmos, ARI/NMI contra el ground truth completo
+(incluye `clean`). Resultados en `output/phase3_revalidation.json`.
+
+### Resultados (mejor config por algoritmo)
+
+| Algoritmo | Pesos | Reduccion | ARI | NMI | Clusters | Ruido |
+|---|---|---|---|---|---|---|
+| **HDBSCAN** | a=0.00 b=0.35 g=0.45 d=0.20 | PCA 20D | **0.5815** | 0.4354 | 9 | 18 |
+| MeanShift | a=0.00 b=0.35 g=0.45 d=0.20 | UMAP 5D | 0.4653 | 0.3935 | 4 | 0 |
+| DBSCAN | a=0.00 b=0.35 g=0.45 d=0.20 | UMAP 5D | 0.4640 | 0.3855 | 5 | 19 |
+| KMeans | a=0.00 b=0.35 g=0.45 d=0.20 | UMAP 5D | 0.4606 | 0.3896 | 5 | 0 |
+| Agglomerative | a=0.00 b=0.35 g=0.45 d=0.20 | UMAP 5D | 0.4606 | 0.3896 | 5 | 0 |
+
+**Nota sobre comparabilidad:** los numeros de la seccion 4 provienen del
+grid search del orchestrator original (embeddings sinteticos, protocolo de
+validacion no recuperable). Con el protocolo actual y los mismos pesos
+"old-best" (a=0.35 b=0.15 g=0.50 d=0.00), UMAP+KMeans da ARI=0.2443 — el
+0.4085 original no es reproducible con el protocolo documentado aqui.
+
+### Hallazgos principales
+
+1. **HDBSCAN es el nuevo mejor algoritmo** (ARI 0.5815). La familia de
+   densidad se rehabilita parcialmente: HDBSCAN supera a KMeans sin el
+   problema de ruido masivo de DBSCAN (18 puntos vs 103 del reporte original).
+
+2. **H1_a sigue refutada para DBSCAN:** con embeddings reales y pesos
+   old-best, KMeans (ARI=0.2443) > DBSCAN (ARI=0.1429, 74 puntos de ruido).
+
+3. **El texto semantico NO mejora el ARI en este ground truth.** Todas las
+   configuraciones ganadoras tienen alpha=0. Dos causas identificadas:
+   - **El peso alpha esta roto dimensionalmente:** el bloque de texto aporta
+     varianza total 384*alpha^2 (384 dims z-scoreadas), que ahoga a los ~18
+     dims estructurales. Con alpha=0.05 el texto ya tiene MAS varianza total
+     (0.96) que la estructura (0.88). Incluso normalizando por bloque
+     (varianza texto = varianza estructura), el ARI con alpha>0 se queda en
+     ~0.27 vs 0.58 con alpha=0.
+   - **El ground truth es estructural por tabla** (giant_table=105,
+     clean=81, wrong_data_types=22...): la semantica cruza tablas (todas las
+     FECHA_* juntas) y contradice las clases del GT, que dependen del patron
+     a nivel de tabla. El embedding semantico agrupa por significado, no por
+     anti-patron.
+
+4. **Implicacion de diseno:** el rol correcto del embedding semantico en
+   este sistema es la deteccion de redundancia semantica (columnas con
+   igual significado en tablas distintas), no la clasificacion de
+   anti-patrones estructurales — para eso rinden las features estructurales
+   y el Rule Engine.
+
+---
+
 ## 5. Anti-patrones detectados
 
 ### Fechas como texto (11 columnas)
