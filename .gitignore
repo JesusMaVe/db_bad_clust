@@ -28,7 +28,7 @@ output/notebook_results/
 Untitled.ipynb
 
 # Planning docs (local only)
-docs/superpowers/
+docs/*
 
 # IDE
 .idea/
