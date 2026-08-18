@@ -110,12 +110,22 @@ def _has_boolean_keyword(name_lower: str) -> bool:
     return False
 
 
+def _kw_match(name_lower: str, keyword: str) -> bool:
+    """Token-boundary keyword match (same as rule_engine._kw_match)."""
+    tokens = name_lower.replace("-", "_").split("_")
+    return any(
+        t == keyword or t.startswith(keyword) or t.endswith(keyword)
+        for t in tokens
+        if t
+    )
+
+
 def _has_number_keyword(name_lower: str) -> bool:
     """Check if column name contains a number keyword, with exceptions."""
     if name_lower in NUMBER_KEYWORDS_EXCEPTIONS:
         return False
     for kw in NUMBER_KEYWORDS_HIGH:
-        if kw in name_lower:
+        if _kw_match(name_lower, kw):
             return True
     words = name_lower.replace("-", "_").split("_")
     for word in words:
@@ -212,18 +222,18 @@ def _get_column_anti_pattern(col_name: str, data_type: str, table: AntiPatternTa
         if col_name.upper() == "ID":
             return "impossible_data"
 
-    # Check for wrong data types
-    if table.wrong_data_types:
-        col_type = data_type.upper().split("(")[0].split(" ")[0]
-        mapped_type = ORACLE_TYPE_MAP.get(col_type, col_type)
-        text_types = set(ORACLE_TYPE_MAP.get(t, t) for t in ["VARCHAR", "CHAR"])
+    # Check for wrong data types (column-level, ANY table: the catalog
+    # deliberately mistypes columns in tables without the table-level flag)
+    col_type = data_type.upper().split("(")[0].split(" ")[0]
+    mapped_type = ORACLE_TYPE_MAP.get(col_type, col_type)
+    text_types = set(ORACLE_TYPE_MAP.get(t, t) for t in ["VARCHAR", "CHAR"])
 
-        if mapped_type in text_types:
-            name_lower = col_name.lower()
-            is_date = any(kw in name_lower for kw in DATE_KEYWORDS_HIGH)
-            is_number = _has_number_keyword(name_lower)
-            if is_date or is_number:
-                return "wrong_data_types"
+    if mapped_type in text_types:
+        name_lower = col_name.lower()
+        is_date = any(_kw_match(name_lower, kw) for kw in DATE_KEYWORDS_HIGH)
+        is_number = _has_number_keyword(name_lower)
+        if is_date or is_number:
+            return "wrong_data_types"
 
     return LABEL_CLEAN
 

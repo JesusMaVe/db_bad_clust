@@ -194,15 +194,30 @@ def _has_boolean_keyword(name_lower: str) -> bool:
     return False
 
 
+def _kw_match(name_lower: str, keyword: str) -> bool:
+    """Token-boundary keyword match.
+
+    Prevents substring false positives like 'fec' matching inside
+    'afectada'. A keyword matches when a token (name split on _ or -)
+    equals it or has it as prefix/suffix (camelCase without separators).
+    """
+    tokens = name_lower.replace("-", "_").split("_")
+    return any(
+        t == keyword or t.startswith(keyword) or t.endswith(keyword)
+        for t in tokens
+        if t
+    )
+
+
 def _has_number_keyword(name_lower: str) -> bool:
     """Check if column name contains a number keyword, with exceptions."""
     # Check exceptions first
     if name_lower in NUMBER_KEYWORDS_EXCEPTIONS:
         return False
 
-    # Check high severity (always match)
+    # Check high severity (token-boundary match)
     for kw in NUMBER_KEYWORDS_HIGH:
-        if kw in name_lower:
+        if _kw_match(name_lower, kw):
             return True
 
     # Check medium severity (word boundary match)
@@ -313,7 +328,7 @@ class ColumnRuleEngine:
 
             if mapped_type in canonical_types:
                 name_lower = col.name.lower()
-                if any(kw in name_lower for kw in DATE_KEYWORDS_HIGH):
+                if any(_kw_match(name_lower, kw) for kw in DATE_KEYWORDS_HIGH):
                     results.append(
                         ClassificationResult(
                             column_name=col.name,
@@ -611,7 +626,7 @@ class ColumnRuleEngine:
                 if mapped_type not in text_types:
                     continue
                 name_lower = col.name.lower()
-                is_date = any(kw in name_lower for kw in DATE_KEYWORDS_HIGH)
+                is_date = any(_kw_match(name_lower, kw) for kw in DATE_KEYWORDS_HIGH)
                 is_number = _has_number_keyword(name_lower)
                 if is_date or is_number:
                     results.append(
@@ -900,7 +915,7 @@ class TableRuleEngine:
             suspect_cols = []
             for col in varchar_cols:
                 name_lower = col.name.lower()
-                is_date = any(kw in name_lower for kw in DATE_KEYWORDS_HIGH)
+                is_date = any(_kw_match(name_lower, kw) for kw in DATE_KEYWORDS_HIGH)
                 is_number = _has_number_keyword(name_lower)
                 is_boolean = _has_boolean_keyword(name_lower)
                 if is_date or is_number or is_boolean:
@@ -1008,8 +1023,27 @@ def classify(
             key = f"{table.name}.{col.name}"
             cl = col_labels.get(key)
 
-            # Case 1: Table-level label applies to ALL columns
+            # Case 1: Table-level label applies to ALL columns.
+            # Exception: a definitive column-level wrong-type detection
+            # (date/number stored as text) is more specific than the
+            # table-level naming heuristic, so it wins.
             if tl and tl in _TABLE_LABEL_TABLES:
+                if tl == "inconsistent_naming" and cl in (
+                    "date_as_text",
+                    "number_as_text",
+                ):
+                    results.append(ClassificationResult(
+                        column_name=col.name,
+                        table_name=table.name,
+                        predicted_label=cl,
+                        confidence=0.85,
+                        severity=Severity.MEDIUM,
+                        method="rule_engine",
+                        explanation=f"Column '{col.name}' detected as {cl}.",
+                        fix="",
+                        needs_review=True,
+                    ))
+                    continue
                 results.append(ClassificationResult(
                     column_name=col.name,
                     table_name=table.name,

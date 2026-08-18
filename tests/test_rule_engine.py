@@ -15,17 +15,15 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import pytest
-from rule_engine import (
-    ColumnRuleEngine,
-    TableRuleEngine,
-    RuleMatch,
-    ClassificationResult,
-    Severity,
-    SQL_RESERVED_WORDS,
-    GIANT_TABLE_THRESHOLD,
-)
-from schema_extractor import ColumnMetadata, TableMetadata, DatabaseSchema
 
+from rule_engine import (
+    ClassificationResult,
+    ColumnRuleEngine,
+    RuleMatch,
+    Severity,
+    TableRuleEngine,
+)
+from schema_extractor import ColumnMetadata, DatabaseSchema, TableMetadata
 
 # ── Fixtures ────────────────────────────────────────────────────────────
 
@@ -1371,3 +1369,55 @@ class TestDuplicateColumnNames:
         assert {r.table_name for r in results} == {
             "EMPLEADOS", "USUARIOS_WEB", "CATEGORIAS"
         }
+
+
+# ─── Regression: keyword token-boundary matching (issue #3) ────────────
+
+class TestKeywordTokenMatching:
+    """'fec' must not match inside 'afectada' (substring bug)."""
+
+    def test_fec_not_matched_inside_afectada(self) -> None:
+        from rule_engine import DATE_KEYWORDS_HIGH, _kw_match
+
+        assert not any(_kw_match("tabla_afectada", kw) for kw in DATE_KEYWORDS_HIGH)
+
+    def test_fec_matched_as_token_prefix(self) -> None:
+        from rule_engine import _kw_match
+
+        assert _kw_match("fec_nacimiento", "fec")
+        assert _kw_match("fecha_nacimiento", "fecha")
+        assert _kw_match("fechaNacimiento".lower(), "fecha")  # camelCase, no separator
+
+    def test_afectada_not_flagged_date_as_text(self) -> None:
+        col = ColumnMetadata(name="TABLA_AFECTADA", data_type="VARCHAR2", nullable=True)
+        schema = DatabaseSchema(tables=[TableMetadata(name="T", columns=[col])])
+        results = ColumnRuleEngine().classify([col], schema)
+        assert all(r.predicted_label != "date_as_text" for r in results)
+
+
+# ─── Regression: column-level wrong-type beats naming heuristic ────────
+
+class TestWrongTypeOverridesNaming:
+    """A date/number stored as text must surface even in a table the
+    naming heuristic flags (e.g. ORDENES_COMPRA: ORDER_ID + FECHA_ORDEN)."""
+
+    @staticmethod
+    def _schema() -> DatabaseSchema:
+        cols = [
+            ColumnMetadata(name="ORDER_ID", data_type="NUMBER", nullable=True),
+            ColumnMetadata(name="FECHA_ORDEN", data_type="VARCHAR2(50)", nullable=True),
+            ColumnMetadata(name="PRECIO", data_type="VARCHAR2(20)", nullable=True),
+        ]
+        return DatabaseSchema(tables=[TableMetadata(name="ORDENES_COMPRA", columns=cols)])
+
+    def test_mistyped_columns_not_masked_by_naming(self) -> None:
+        from rule_engine import classify as classify_schema
+
+        results = classify_schema(schema=self._schema())
+        by_col = {r.column_name: r.predicted_label for r in results}
+        # 'orden' is also a (medium) number keyword, so FECHA_ORDEN may be
+        # caught by either rule — both map to wrong_data_types downstream
+        assert by_col["FECHA_ORDEN"] in ("date_as_text", "number_as_text")
+        assert by_col["PRECIO"] == "number_as_text"
+        # non-suspect columns keep the table-level label
+        assert by_col["ORDER_ID"] == "inconsistent_naming"
