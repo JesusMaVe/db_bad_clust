@@ -1319,3 +1319,55 @@ class TestEdgeCases:
         results = table_engine.classify(schema)
         assert len(results) == 1
         assert results[0].predicted_label == "giant_table"
+
+
+# ─── Regression: duplicate column names across tables ─────────────────
+
+class TestDuplicateColumnNames:
+    """Same column name in several tables must yield one detection each.
+
+    Regression: ColumnRuleEngine used to emit table_name="" and the merge
+    keyed by "{table}.{column}", collapsing e.g. ACTIVO in 4 tables into
+    a single detection.
+    """
+
+    @staticmethod
+    def _schema() -> DatabaseSchema:
+        return DatabaseSchema(
+            tables=[
+                TableMetadata(
+                    name=t,
+                    columns=[
+                        ColumnMetadata(
+                            name="ACTIVO",
+                            data_type="CHAR",
+                            data_length=1,
+                            nullable=True,
+                        ),
+                    ],
+                )
+                for t in ("EMPLEADOS", "USUARIOS_WEB", "CATEGORIAS")
+            ]
+        )
+
+    def test_column_engine_detects_all_duplicates(self) -> None:
+        """Column engine attributes each ACTIVO to its own table."""
+        schema = self._schema()
+        results = ColumnRuleEngine().classify(
+            [c for t in schema.tables for c in t.columns], schema
+        )
+        assert len(results) == 3
+        assert {r.table_name for r in results} == {
+            "EMPLEADOS", "USUARIOS_WEB", "CATEGORIAS"
+        }
+
+    def test_classify_merge_no_collision(self) -> None:
+        """Module-level classify() labels every duplicate column."""
+        from rule_engine import classify as classify_schema
+
+        results = classify_schema(schema=self._schema())
+        assert len(results) == 3
+        assert all(r.predicted_label == "bad_boolean" for r in results)
+        assert {r.table_name for r in results} == {
+            "EMPLEADOS", "USUARIOS_WEB", "CATEGORIAS"
+        }

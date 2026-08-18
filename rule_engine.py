@@ -235,6 +235,7 @@ class ColumnRuleEngine:
     """
 
     def __init__(self) -> None:
+        self._col_id_to_table: dict[int, str] = {}
         self._rules = [
             self._rule_wrong_date_as_text,
             self._rule_wrong_number_as_text,
@@ -268,18 +269,34 @@ class ColumnRuleEngine:
         for table_name, col in col_table_pairs:
             col_name_to_table[col.name] = table_name
 
+        # Identity-based lookup: same column name may exist in several
+        # tables (e.g. ACTIVO); name lookups would collapse them.
+        self._col_id_to_table: dict[int, str] = {}
+        if schema:
+            for table_name, col in col_table_pairs:
+                self._col_id_to_table[id(col)] = table_name
+
         for rule_fn in self._rules:
             rule_results = rule_fn(columns, schema)
+            if schema:
+                for r in rule_results:
+                    if not r.table_name:
+                        match = next(
+                            (t.name for t in schema.tables
+                             for c in t.columns if c.name == r.column_name),
+                            None,
+                        )
+                        if match:
+                            r.table_name = match
             results.extend(rule_results)
-
-        # Fill in table_name from schema if available
-        if schema:
-            for r in results:
-                if not r.table_name and r.column_name in col_name_to_table:
-                    r.table_name = col_name_to_table[r.column_name]
 
         results.sort(key=lambda r: (-r.confidence, r.column_name))
         return results
+
+
+    def _table_for(self, col: ColumnMetadata) -> str:
+        """Return the table name for a column via identity lookup."""
+        return self._col_id_to_table.get(id(col), "")
 
     # ── Rule 1: wrong_date_as_text ─────────────────────────────────────
 
@@ -300,7 +317,7 @@ class ColumnRuleEngine:
                     results.append(
                         ClassificationResult(
                             column_name=col.name,
-                            table_name="",
+                            table_name=self._table_for(col),
                             predicted_label="date_as_text",
                             confidence=0.9,
                             severity=Severity.HIGH,
@@ -335,7 +352,7 @@ class ColumnRuleEngine:
                     results.append(
                         ClassificationResult(
                             column_name=col.name,
-                            table_name="",
+                            table_name=self._table_for(col),
                             predicted_label="number_as_text",
                             confidence=0.85,
                             severity=Severity.HIGH,
@@ -370,7 +387,7 @@ class ColumnRuleEngine:
                     results.append(
                         ClassificationResult(
                             column_name=col.name,
-                            table_name="",
+                            table_name=self._table_for(col),
                             predicted_label="bad_boolean",
                             confidence=0.8,
                             severity=Severity.MEDIUM,
@@ -399,7 +416,7 @@ class ColumnRuleEngine:
                 results.append(
                     ClassificationResult(
                         column_name=col.name,
-                        table_name="",
+                        table_name=self._table_for(col),
                         predicted_label="reserved_words",
                         confidence=0.95,
                         severity=Severity.HIGH,
@@ -948,10 +965,11 @@ def classify(
     col_engine = ColumnRuleEngine()
     table_engine = TableRuleEngine()
 
-    # Flatten all columns
-    all_cols = [col for table in schema.tables for col in table.columns]
-
-    col_results = col_engine.classify(columns=all_cols, schema=schema)
+    # Run column rules per table: the same column name may exist in several
+    # tables (e.g. ACTIVO), so a single flat run collapses detections.
+    col_results: list[ClassificationResult] = []
+    for table in schema.tables:
+        col_results.extend(col_engine.classify(columns=table.columns, schema=schema))
     table_results = table_engine.classify(schema=schema)
 
     # Build table-level label map: table_name → label
