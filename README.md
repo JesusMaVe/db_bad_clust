@@ -14,6 +14,7 @@ pip install -r requirements.txt
 ## Notebooks — ML Pipeline
 
 Run in order:
+
 1. `notebooks/01_data_preparation.ipynb` — schema extraction + preprocessing + structural encoding
 2. `notebooks/02_ml_embeddings.ipynb` — BERT embeddings + feature building + dimensionality reduction
 3. `notebooks/03_clustering.ipynb` — clustering + ground truth comparison
@@ -24,6 +25,7 @@ Run in order:
 Set `SKIP_BERT = True` in notebook 02 to use synthetic embeddings (avoids ~1.5GB download).
 
 Best known config:
+
 - alpha=0.35, beta=0.15, gamma=0.50, delta=0.00
 - UMAP 5 components, KMeans 5 clusters
 
