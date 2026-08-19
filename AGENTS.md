@@ -5,88 +5,86 @@
 ## Setup
 
 ```bash
-source .venv/bin/activate
+docker compose up -d          # Oracle 23c, healthcheck ~30s
 pip install -r requirements.txt
 ```
 
-## Phase 1 — Oracle DB Generation (scripts/)
+Use `.venv/bin/python -m <cmd>` — venv shebangs are stale (folder was renamed), entrypoints like `jupyter`/`pip`/`nbconvert` fail.
+
+## Oracle DB — NOT fully reproducible from the repo
+
+- The 23 tables were created ad-hoc; there is no DDL generator in the repo (`scripts/` no longer exists).
+- `anti_patterns.py` is a **data-only catalog** (no `__main__`) — importing it gives the expected schema; running it does nothing.
+- The DB is expected to match the catalog. If they drift (e.g. a catalog table missing in Oracle), metrics silently change — this happened with DATOS_MAESTROS (issue #2).
+- The only runnable DB step is the documentation overlay:
 
 ```bash
-docker compose up -d
-python3 anti_patterns.py   # Generate anti-pattern table catalog
-python3 apply_comments.py  # Apply documentation overlay (comments) to the DB
+.venv/bin/python apply_comments.py   # applies TABLE_COMMENTS/COLUMN_COMMENTS to Oracle
 ```
 
-## Phase 2/3 — ML Pipeline (Notebooks)
+- It requires the Oracle container up (`docker compose up -d`, wait for healthy).
 
-Run in order from `notebooks/` directory:
-1. `01_data_preparation.ipynb` — schema extraction + preprocessing + structural encoding
-2. `02_ml_embeddings.ipynb` — BERT embeddings + feature building + dimensionality reduction
-3. `03_classification.ipynb` — Rule Engine + ML Fallback
-4. `04_analysis.ipynb` — Classification metrics
+## ML Pipeline (Notebooks)
 
-Each notebook saves intermediate data via pickle in `output/` for the next notebook.
+Run in order; each saves a pickle to `output/` for the next:
 
-## Module Files (root)
+1. `notebooks/01_data_preparation.ipynb` — extraction + preprocessing + structural encoding
+2. `notebooks/02_ml_embeddings.ipynb` — sentence embeddings + feature building + reduction
+3. `notebooks/03_classification.ipynb` — Rule Engine + evaluation vs ground truth
+4. `notebooks/04_analysis.ipynb` — metrics + recommendations (writes `output/notebook_results/`)
 
-Python modules live at the repo root (not in scripts/):
+Headless (verified):
 
-### Data Pipeline
-- `db_connector.py` — Oracle connection
-- `schema_extractor.py` — metadata extraction from Oracle (bulk queries: one per dictionary view, incl. comments/identity/virtual columns)
-- `apply_comments.py` — applies the documentation overlay (TABLE_COMMENTS/COLUMN_COMMENTS in anti_patterns.py) to the DB
-- `text_preprocessor.py` — column name preprocessing for BERT (appends column comments; lowercases only ALL-CAPS tokens)
-- `structural_encoder.py` — data type + constraint encoding
-- `bert_embedder.py` — sentence embeddings via paraphrase-multilingual-MiniLM-L12-v2 (mean pooling + L2 norm, 384 dims)
-- `feature_builder.py` — composite vector construction
+```bash
+.venv/bin/python -m nbconvert --to notebook --execute --inplace notebooks/01_data_preparation.ipynb
+```
 
-### ML Pipeline
-- `dimensionality_reducer.py` — PCA/UMAP/t-SNE/SVD
-- `cluster_engine.py` — KMeans/DBSCAN/HDBSCAN/Agglomerative/MeanShift
+Notebooks use `sys.path.insert(0, str(Path.cwd().parent))` — run from `notebooks/` in Jupyter, or any dir with nbconvert.
+Notebooks 01+03+04 need Oracle up; 02 needs it only transitively (reads pickle). Notebooks 01–02 re-run takes minutes with real BERT (`SKIP_BERT=False`); 03–04 are fast.
 
-### Evaluation (SRP-refactored)
-- `evaluator.py` — facade module (delegates to specialized modules)
-- `metrics.py` — internal clustering quality metrics (silhouette, DB, CH)
-- `validation.py` — external validation against ground truth (ARI, NMI)
-- `anomaly.py` — anomaly detection (centroid distance, precision/recall)
-- `reporter.py` — formatted text report generation
+## Modules (repo root, not scripts/)
 
-### Anti-patterns
-- `recommender.py` — anti-pattern recommendations
-- `recommendation_reporter.py` — formatted text report generation
-- `ground_truth.py` — anti-pattern ground truth mapping
-- `anti_patterns.py` — table catalog (1430 lines, data-only)
-- `exceptions.py` — exception hierarchy
+- Data: `db_connector.py`, `schema_extractor.py` (bulk queries: one per dictionary view + redundant-index scan), `text_preprocessor.py`, `structural_encoder.py`, `bert_embedder.py` (MiniLM-L12, mean pooling, 384D), `feature_builder.py`
+- ML: `dimensionality_reducer.py`, `cluster_engine.py`
+- Evaluation: `evaluator.py` (facade) → `metrics.py`, `validation.py`, `anomaly.py`, `reporter.py`
+- Anti-patterns: `rule_engine.py`, `recommender.py`, `recommendation_reporter.py`, `ground_truth.py`, `anti_patterns.py` (catalog), `apply_comments.py`, `exceptions.py`
+
+## Tests & lint
+
+```bash
+.venv/bin/python -m pytest tests/ -v                 # 458 tests, NO DB required (mock-based)
+.venv/bin/python -m pytest tests/test_rule_engine.py::TestSchemaSpySignals -q   # single test
+.venv/bin/python -m ruff check .                     # ~66 pre-existing errors (mostly old tests + rule_engine.py); new code should be lint-clean
+```
+
+## Critical invariants (learned the hard way)
+
+- **Keyword lists are duplicated** in `rule_engine.py` and `ground_truth.py` — any change (keyword, exception, matcher) must be applied in BOTH or metrics silently diverge.
+- **Keyword matching is token-boundary** (`_kw_match`) — substring matching caused false positives ('fec' matched inside 'afectada'). Never revert to `kw in name`.
+- **SchemaSpy detections are report-level** (`detect_missing_pk` / `detect_redundant_indexes` / `detect_implicit_fks` are NOT in the classify() rule chain) — adding them there would mask all other detections (all 23 tables lack PK) and pollute classification metrics.
+- **Column-level date/number_as_text beats table-level inconsistent_naming** in the merge (deliberate; issue #3).
+- **ColumnRuleEngine must be invoked per table** in `classify()` — a flat run collapses same-named columns (ACTIVO × 4) into one detection (issue #2).
+- Ground truth is structural per-table; semantic embeddings do NOT improve ARI (α=0 wins) — embeddings are for semantic redundancy, not anti-pattern classification.
 
 ## Configuration
 
-Set `SKIP_BERT = True` in notebook 02 to use synthetic embeddings (avoids ~470MB download).
-
-Best known config:
-- Feature weights (classification notebooks): alpha=0.15, beta=0.35, gamma=0.45, delta=0.05
-- Clustering (re-validated, issue #1): alpha=0.00, beta=0.35, gamma=0.45, delta=0.20 + PCA 20D + HDBSCAN (ARI 0.5815)
-- UMAP: n_components=5, n_neighbors=25, min_dist=0.05
-- Rule Engine: 10 categories, ~73% coverage, accuracy 0.9465 / F1-macro 0.7938
-- ML fallback (One-Class SVM) disabled — worse than rules
-
-## Tests
-
-```bash
-python3 -m pytest tests/ -v   # 458 tests, no DB required
-```
+- `SKIP_BERT = True` in notebook 02 → synthetic embeddings (avoids ~470MB MiniLM download). Current pickle was built with real embeddings.
+- Classification weights (notebooks): α=0.15, β=0.35, γ=0.45, δ=0.05
+- Best clustering (re-validated, issue #1): α=0.00, β=0.35, γ=0.45, δ=0.20 + PCA 20D + HDBSCAN → ARI 0.5815
+- Rule Engine: 10 categories, accuracy 0.9465 / F1-macro 0.7938 (243 columns)
+- One-Class SVM fallback disabled — worse than rules
 
 ## Gotchas
 
-- Notebooks use `sys.path.insert(0, str(Path.cwd().parent))` to import root modules
-- MiniLM-L12 downloads ~470MB on first run — use `SKIP_BERT=True`
-- Table names case-sensitive — always double-quote
-- Oracle 23c healthcheck takes ~30s
-- `config.yaml` says `tables_count:10` but actual count is 23
-- venv shebangs are stale (folder was renamed) — use `.venv/bin/python -m <cmd>`, not entrypoints
-- Oracle rejects exact duplicate indexes (ORA-01408) — redundant-index anti-pattern is a composite index with duplicated prefix
-- Keyword matching in rule_engine/ground_truth uses token-boundary (`_kw_match`) — substring matching caused false positives ('fec' in 'afectada')
+- Table names case-sensitive in Oracle — always double-quote
+- Oracle allows only one LONG column per table (ORA-01754) — catalog uses CLOB/BLOB for the rest
+- Oracle rejects exact duplicate indexes (ORA-01408) — redundant-index anti-pattern is a composite index duplicating a single-column prefix; the two in the DB (EMPLEADOS, ORDENES_COMPRA) were created manually
+- `config.yaml` says `tables_count:10` but actual count is 23 — config value is unused
+- `tests/conftest.py` inserts a non-existent `scripts/` path — harmless, imports resolve from root
 
 ## Reference
 
-- `docs/phase2/00_anti_patterns_catalog.md` — anti-pattern catalog
-- `docs/phase2/11_completion_report.md` — Phase 2 results
+- `docs/implementation.md` — what was built + experimental results; §4-bis/§4-ter are the current post-improvement numbers
+- `docs/research_extraction_preprocessing.md` — best-practices research with primary sources
+- `docs/phase3/02_final_report.md` — Phase 3 report (pre-revalidation numbers)
+- GitHub issues #1–#5 (closed) document each improvement with root-cause analysis
