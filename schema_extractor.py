@@ -83,6 +83,8 @@ class DatabaseSchema:
     """Container for the full extracted database schema."""
 
     tables: list[TableMetadata] = field(default_factory=list)
+    # SchemaSpy-style signal: (table, column, single_index, composite_index)
+    redundant_indexes: list[tuple[str, str, str, str]] = field(default_factory=list)
 
     def table_names(self) -> list[str]:
         """Return the list of table names."""
@@ -176,7 +178,10 @@ class SchemaExtractor:
                 len(tables),
                 sum(len(t.columns) for t in tables),
             )
-            return DatabaseSchema(tables=tables)
+            return DatabaseSchema(
+                tables=tables,
+                redundant_indexes=self.get_redundant_indexes(),
+            )
         except oracledb.Error as exc:
             raise SchemaError(f"Failed to extract schema: {exc}") from exc
 
@@ -282,6 +287,40 @@ class SchemaExtractor:
         for table_name, column_name in self.cursor.fetchall():
             result.setdefault(table_name, set()).add(column_name)
         return result
+
+    def get_redundant_indexes(self) -> list[tuple[str, str, str, str]]:
+        """Return redundant index pairs: a composite index whose leading
+        column already has a single-column index (SchemaSpy-style signal).
+
+        Returns:
+            List of (table_name, column_name, single_index, composite_index).
+        """
+        self.cursor.execute(
+            """
+            SELECT table_name, column_name, index_name, column_position
+            FROM user_ind_columns
+            ORDER BY table_name, index_name, column_position
+            """
+        )
+        by_index: dict[tuple[str, str], list[tuple[str, int]]] = {}
+        for table_name, column_name, index_name, position in self.cursor.fetchall():
+            by_index.setdefault((table_name, index_name), []).append((column_name, position))
+
+        # single-column indexes per table
+        singles: dict[tuple[str, str], str] = {}
+        for (tname, iname), cols in by_index.items():
+            if len(cols) == 1:
+                singles[(tname, cols[0][0])] = iname
+
+        # composite indexes whose leading column has a single index
+        redundant: list[tuple[str, str, str, str]] = []
+        for (tname, iname), cols in by_index.items():
+            if len(cols) > 1:
+                leading = min(cols, key=lambda c: c[1])[0]
+                single = singles.get((tname, leading))
+                if single:
+                    redundant.append((tname, leading, single, iname))
+        return redundant
 
     def _get_table_comments(self) -> dict[str, str]:
         """Return {table_name -> comment} for tables that have one."""

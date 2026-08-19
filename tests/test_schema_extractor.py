@@ -43,7 +43,15 @@ class FakeCursor:
                 ("EMPLEADOS", "EMAIL", "CONFIGURACION", "CLAVE", "FK_EMAIL")
             ]
         elif "user_ind_columns" in sql_l:
-            self._rows = [("EMPLEADOS", "EMAIL")]
+            if "column_position" in sql_l:
+                # Redundant-index query (4 columns)
+                self._rows = [
+                    ("EMPLEADOS", "ID", "IDX_EMP_0", 1),
+                    ("EMPLEADOS", "ID", "IDX_EMP_RED", 1),
+                    ("EMPLEADOS", "ACTIVO", "IDX_EMP_RED", 2),
+                ]
+            else:
+                self._rows = [("EMPLEADOS", "EMAIL")]
         elif "user_tab_comments" in sql_l:
             self._rows = [("EMPLEADOS", "Tabla de empleados")]
         elif "user_col_comments" in sql_l:
@@ -76,10 +84,10 @@ def schema():
 
 class TestBulkExtraction:
     def test_no_n_plus_one(self):
-        """Exactly 8 dictionary queries total, regardless of table count."""
+        """Exactly 9 dictionary queries total (8 views + redundant-index scan)."""
         conn = FakeConnection()
         SchemaExtractor(conn).extract_all()  # type: ignore[arg-type]
-        assert len(conn._cursor.executed) == 8
+        assert len(conn._cursor.executed) == 9
         assert not any(":table_name" in s for s in conn._cursor.executed)
 
     def test_tables_and_columns(self, schema):
@@ -120,3 +128,13 @@ class TestBulkExtraction:
 
         schema = SchemaExtractor(FakeConnection(EmptyCursor())).extract_all()  # type: ignore[arg-type]
         assert schema.tables == []
+
+
+class TestRedundantIndexes:
+    """Verify composite index duplicating a single index is detected."""
+
+    def test_redundant_pair_found(self, schema):
+        # FakeCursor: IDX_EMP_0(ID) single + IDX_EMP_RED(ID, ACTIVO) composite
+        assert schema.redundant_indexes == [
+            ("EMPLEADOS", "ID", "IDX_EMP_0", "IDX_EMP_RED")
+        ]

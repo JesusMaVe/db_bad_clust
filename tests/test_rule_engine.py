@@ -1421,3 +1421,54 @@ class TestWrongTypeOverridesNaming:
         assert by_col["PRECIO"] == "number_as_text"
         # non-suspect columns keep the table-level label
         assert by_col["ORDER_ID"] == "inconsistent_naming"
+
+
+# ─── SchemaSpy signals: missing PK / redundant index / implicit FK ──────
+
+class TestSchemaSpySignals:
+    """Report-level findings must not leak into column classification."""
+
+    @staticmethod
+    def _schema() -> DatabaseSchema:
+        # PRODUCTOS: no PK, PRODUCTO_ID elsewhere references it implicitly
+        productos = TableMetadata(name="PRODUCTOS", columns=[
+            ColumnMetadata(name="ID", data_type="NUMBER", nullable=True),
+        ])
+        ventas = TableMetadata(name="VENTAS", columns=[
+            ColumnMetadata(name="ID", data_type="NUMBER", nullable=True),
+            ColumnMetadata(name="PRODUCTO_ID", data_type="NUMBER", nullable=True),
+        ])
+        return DatabaseSchema(tables=[productos, ventas])
+
+    def test_missing_pk_detected(self) -> None:
+        results = TableRuleEngine().detect_missing_pk(self._schema())
+        assert {r.table_name for r in results} == {"PRODUCTOS", "VENTAS"}
+        assert all(r.predicted_label == "missing_pk" for r in results)
+
+    def test_missing_pk_not_in_classify(self) -> None:
+        """classify() must not emit missing_pk (report-level only)."""
+        results = TableRuleEngine().classify(schema=self._schema())
+        assert all(r.predicted_label != "missing_pk" for r in results)
+
+    def test_implicit_fk_detected(self) -> None:
+        schema = self._schema()
+        cols = [c for t in schema.tables for c in t.columns]
+        results = ColumnRuleEngine().detect_implicit_fks(cols, schema)
+        assert len(results) == 1
+        assert results[0].column_name == "PRODUCTO_ID"
+        assert results[0].table_name == "VENTAS"
+
+    def test_implicit_fk_not_in_classify(self) -> None:
+        """classify() must not emit implicit_fk (report-level only)."""
+        schema = self._schema()
+        cols = [c for t in schema.tables for c in t.columns]
+        results = ColumnRuleEngine().classify(cols, schema)
+        assert all(r.predicted_label != "implicit_fk" for r in results)
+
+    def test_redundant_index_from_schema_signal(self) -> None:
+        schema = self._schema()
+        schema.redundant_indexes = [("VENTAS", "ID", "IDX_V_0", "IDX_V_RED")]
+        results = TableRuleEngine().detect_redundant_indexes(schema)
+        assert len(results) == 1
+        assert results[0].predicted_label == "redundant_index"
+        assert results[0].table_name == "VENTAS"

@@ -18,9 +18,9 @@ import logging
 from collections import defaultdict
 from typing import Any
 
-from schema_extractor import ColumnMetadata, DatabaseSchema
 from recommendation_reporter import RecommendationReporter
-from rule_engine import ColumnRuleEngine, TableRuleEngine, ClassificationResult, Severity
+from rule_engine import ClassificationResult, ColumnRuleEngine, Severity, TableRuleEngine
+from schema_extractor import DatabaseSchema
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +36,9 @@ ANTI_PATTERN_ACTIONS = {
     "giant_table": "Split into smaller, focused tables;",
     "eav_pattern": "Normalize to proper relational design or use JSON/XML;",
     "inconsistent_naming": "Standardize to {primary} convention;",
+    "implicit_fk": "Add a FOREIGN KEY constraint to the referenced table;",
+    "missing_pk": "Add a PRIMARY KEY constraint on a unique identifier column;",
+    "redundant_index": "Drop the redundant index or extend it;",
 }
 
 
@@ -69,6 +72,14 @@ class Recommender:
 
         col_results = self.col_engine.classify(all_columns, schema)
         table_results = self.table_engine.classify(schema)
+
+        # SchemaSpy-style report-level findings (not column labels)
+        col_results = col_results + self.col_engine.detect_implicit_fks(all_columns, schema)
+        table_results = (
+            table_results
+            + self.table_engine.detect_missing_pk(schema)
+            + self.table_engine.detect_redundant_indexes(schema)
+        )
 
         col_groups = self._group_column_results(col_results)
         table_groups = self._group_table_results(table_results)

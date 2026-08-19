@@ -597,7 +597,72 @@ class ColumnRuleEngine:
 
         return results
 
-    # ── Rule 8: wrong_data_types ────────────────────────────────────────
+    # ── Rule 8: implicit foreign key (SchemaSpy signal) ─────────────────
+
+    def detect_implicit_fks(
+        self, columns: list[ColumnMetadata], schema: DatabaseSchema | None
+    ) -> list[ClassificationResult]:
+        """Detect implicit FKs: a column named like a reference (e.g.
+        PRODUCTO_ID) with no FK constraint declared (SchemaSpy signal).
+
+        Report-level finding: not part of the classify() rules because the
+        label has no ground-truth counterpart.
+
+        Only flags when the referenced-looking name matches a real column
+        of another table (e.g. PRODUCTOS.ID) — avoids flagging plain IDs.
+        """
+        results: list[ClassificationResult] = []
+
+        if not schema:
+            return results
+
+        # All referenced candidates: {column_name -> [table names]}
+        ref_targets: dict[str, list[str]] = {}
+        for table in schema.tables:
+            for col in table.columns:
+                if col.is_primary_key or col.name.upper() == "ID":
+                    ref_targets.setdefault(col.name.upper(), []).append(table.name)
+
+        for table in schema.tables:
+            for col in table.columns:
+                if col.is_foreign_key:
+                    continue
+                name = col.name.upper()
+                # pattern: <TABLE>_ID / <TABLE>_FK or TABLE_BASE.ID
+                base = None
+                if name.endswith("_ID") and len(name) > 3:
+                    base = name[:-3]
+                elif name.endswith("_FK") and len(name) > 3:
+                    base = name[:-3]
+                if not base:
+                    continue
+                # does the base name correspond to a table with a matching PK/ID?
+                target_tables = ref_targets.get("ID", [])
+                plausible = any(
+                    t.startswith(base) or base.startswith(t.rstrip("S"))
+                    for t in target_tables
+                ) or base in {t.rstrip("S") for t in ref_targets if t != "ID"}
+                if plausible:
+                    results.append(
+                        ClassificationResult(
+                            column_name=col.name,
+                            table_name=table.name,
+                            predicted_label="implicit_fk",
+                            confidence=0.7,
+                            severity=Severity.MEDIUM,
+                            method="rule_engine",
+                            explanation=(
+                                f"Column '{col.name}' looks like a reference to "
+                                f"'{base}' but no FK constraint is declared."
+                            ),
+                            fix="Add a FOREIGN KEY constraint to the referenced table.",
+                            needs_review=True,
+                        )
+                    )
+
+        return results
+
+    # ── Rule 9: wrong_data_types ────────────────────────────────────────
 
     def _rule_wrong_data_types(
         self, columns: list[ColumnMetadata], schema: DatabaseSchema | None
@@ -697,9 +762,14 @@ class TableRuleEngine:
 
     def classify(self, schema: DatabaseSchema) -> list[ClassificationResult]:
         """Classify tables using table-level rules.
-        
+
         Priority: giant_table > eav > inconsistent_naming > wrong_data_types.
         Only the highest-priority detection per table is returned.
+
+        Note: missing_pk and redundant_index (SchemaSpy signals) are NOT
+        in the priority chain — they are report-level findings, not
+        column labels. Call detect_missing_pk() / detect_redundant_indexes()
+        explicitly.
         """
         results: list[ClassificationResult] = []
         flagged_tables: set[str] = set()
@@ -881,7 +951,71 @@ class TableRuleEngine:
 
         return results
 
-    # ── Rule 4: wrong_data_types ────────────────────────────────────────
+    # ── Rule 4: missing primary key (SchemaSpy signal) ──────────────────
+
+    def detect_missing_pk(self, schema: DatabaseSchema) -> list[ClassificationResult]:
+        """Detect tables with no primary key (SchemaSpy 'orphan table').
+
+        Report-level finding: not part of the classify() priority chain
+        because it would mask more specific table-level detections.
+        """
+        results: list[ClassificationResult] = []
+
+        for table in schema.tables:
+            if not any(col.is_primary_key for col in table.columns):
+                results.append(
+                    ClassificationResult(
+                        column_name="*",
+                        table_name=table.name,
+                        predicted_label="missing_pk",
+                        confidence=0.9,
+                        severity=Severity.HIGH,
+                        method="rule_engine",
+                        explanation=(
+                            f"Table '{table.name}' has no primary key."
+                        ),
+                        fix="Add a PRIMARY KEY constraint on a unique identifier column.",
+                        needs_review=False,
+                    )
+                )
+
+        return results
+
+    # ── Rule 5: redundant index (SchemaSpy signal) ──────────────────────
+
+    def detect_redundant_indexes(self, schema: DatabaseSchema) -> list[ClassificationResult]:
+        """Detect composite indexes whose leading column duplicates an
+        existing single-column index.
+
+        Report-level finding (see detect_missing_pk).
+
+        Consumes redundant index pairs attached to the schema by
+        SchemaExtractor.get_redundant_indexes() (schema.redundant_indexes).
+        """
+        results: list[ClassificationResult] = []
+        pairs = getattr(schema, "redundant_indexes", None) or []
+
+        for table_name, column_name, single_idx, composite_idx in pairs:
+            results.append(
+                ClassificationResult(
+                    column_name="*",
+                    table_name=table_name,
+                    predicted_label="redundant_index",
+                    confidence=0.85,
+                    severity=Severity.MEDIUM,
+                    method="rule_engine",
+                    explanation=(
+                        f"Index {composite_idx} on '{table_name}' starts with "
+                        f"'{column_name}', already indexed by {single_idx}."
+                    ),
+                    fix=f"Drop the redundant index {single_idx} or extend it.",
+                    needs_review=True,
+                )
+            )
+
+        return results
+
+    # ── Rule 6: wrong_data_types ────────────────────────────────────────
 
     WRONG_DATA_TYPES_THRESHOLD = 20
 
