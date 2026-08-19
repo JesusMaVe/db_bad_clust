@@ -62,25 +62,29 @@ Python modules live at the repo root (not in scripts/):
 
 Set `SKIP_BERT = True` in notebook 02 to use synthetic embeddings (avoids ~470MB download).
 
-Best known config (hardcoded in notebooks):
-- alpha=0.15, beta=0.35, gamma=0.45, delta=0.05
+Best known config:
+- Feature weights (classification notebooks): alpha=0.15, beta=0.35, gamma=0.45, delta=0.05
+- Clustering (re-validated, issue #1): alpha=0.00, beta=0.35, gamma=0.45, delta=0.20 + PCA 20D + HDBSCAN (ARI 0.5815)
 - UMAP: n_components=5, n_neighbors=25, min_dist=0.05
-- Rule Engine: 10 categories, 80-90% coverage
-- One-Class SVM: nu=0.1 (fallback)
+- Rule Engine: 10 categories, ~73% coverage, accuracy 0.9465 / F1-macro 0.7938
+- ML fallback (One-Class SVM) disabled — worse than rules
 
 ## Tests
 
 ```bash
-python3 -m pytest tests/ -v   # 446 tests, no DB required
+python3 -m pytest tests/ -v   # 458 tests, no DB required
 ```
 
 ## Gotchas
 
 - Notebooks use `sys.path.insert(0, str(Path.cwd().parent))` to import root modules
-- BERT downloads ~1.5GB on first run — use `SKIP_BERT=True`
+- MiniLM-L12 downloads ~470MB on first run — use `SKIP_BERT=True`
 - Table names case-sensitive — always double-quote
 - Oracle 23c healthcheck takes ~30s
 - `config.yaml` says `tables_count:10` but actual count is 23
+- venv shebangs are stale (folder was renamed) — use `.venv/bin/python -m <cmd>`, not entrypoints
+- Oracle rejects exact duplicate indexes (ORA-01408) — redundant-index anti-pattern is a composite index with duplicated prefix
+- Keyword matching in rule_engine/ground_truth uses token-boundary (`_kw_match`) — substring matching caused false positives ('fec' in 'afectada')
 
 ## Reference
 

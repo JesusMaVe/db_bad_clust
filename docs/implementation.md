@@ -182,6 +182,52 @@ validacion no recuperable). Con el protocolo actual y los mismos pesos
 
 ---
 
+## 4-ter. Consolidado post-mejoras (agosto 2026, issues #2-#5)
+
+Resumen de todos los cambios de agosto 2026 sobre el pipeline y su efecto
+medido. Detalle por issue en los commits referenciados.
+
+### Pipeline de datos (issue de extraccion/embeddings, commit 5e10b3e)
+
+| Componente | Antes | Despues |
+|---|---|---|
+| Embedding | mBERT + [CLS], 768D | paraphrase-multilingual-MiniLM-L12-v2, mean pooling + L2, 384D |
+| Texto a embeber | nombre de columna preprocesado | + comentario de columna (76 comentarios overlay) |
+| Extraccion | N+1 (~111 queries) | 9 queries bulk |
+| Metadata | tipos + constraints | + comentarios, identity, virtual, indices con posicion |
+| Lowercasing | todo a minusculas | solo tokens ALL-CAPS (modelo cased) |
+| Random Forest (CV) | F1-macro 0.17 | F1-macro 0.34 |
+
+Sanity check semantico del modelo nuevo: cos(salario, precio)=0.283 >
+cos(salario, email)=0.179 — agrupa conceptos relacionados correctamente.
+Justificacion con fuentes primarias: docs/research_extraction_preprocessing.md.
+
+### Clasificacion (issues #2 y #3, commits 260c54e y 5d02348)
+
+| Metrica | Antes | Despues | Causa del cambio |
+|---|---|---|---|
+| wrong_data_types F1 | 0.81 | **1.00** | keyword substring bug + GT under-labeling + prioridad de merge |
+| self_contradictory F1 | 0.00 | 0.40 | colision de nombres duplicados + DATOS_MAESTROS en DB |
+| Accuracy | 0.9149 | **0.9465** | acumulado |
+| F1-macro | 0.7260 | **0.7938** | acumulado |
+| Columnas | 235 | 243 | DATOS_MAESTROS alineada con el catalogo |
+
+Los tres fixes de #3: (1) matching por token-boundary en keywords ('fec'
+hacia match dentro de 'aFECtada'); (2) GT detecta wrong_data_types a nivel
+columna en cualquier tabla, no solo tablas con flag; (3) la deteccion
+column-level date/number_as_text ya no es enmascarada por la heuristica
+table-level inconsistent_naming.
+
+### Senales SchemaSpy (issue #4, commit 5ab68f3)
+
+Tres detecciones de reporte (sin impacto en metricas de clasificacion):
+missing_pk (23 tablas), implicit_fk (2 columnas: EMPLEADO_ID,
+PROVEEDORES_ID), redundant_index (2 tablas: EMPLEADOS, ORDENES_COMPRA).
+Metodos detect_* publicos fuera del chain de prioridad; el Recommender las
+integra al reporte final.
+
+---
+
 ## 5. Anti-patrones detectados
 
 ### Fechas como texto (11 columnas)
@@ -257,4 +303,4 @@ db_bad_clust/
 
 ---
 
-*Documento generado en Mayo 2026. Proyecto completo: 22 tablas, 235 columnas, 5 algoritmos, 4 reducciones, 364 tests, ARI maximo 0.4085.*
+*Documento generado en Mayo 2026, actualizado en agosto 2026 (secciones 4-bis y 4-ter). Proyecto: 23 tablas, 243 columnas, 5 algoritmos, 4 reducciones, 458 tests, accuracy 0.9465 / F1-macro 0.7938 (Rule Engine), ARI maximo 0.5815 (PCA-20D + HDBSCAN).*
