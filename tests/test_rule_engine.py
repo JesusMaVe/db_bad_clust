@@ -1472,3 +1472,121 @@ class TestSchemaSpySignals:
         assert len(results) == 1
         assert results[0].predicted_label == "redundant_index"
         assert results[0].table_name == "VENTAS"
+
+
+# ─── Phase 2 Oracle-specific report-level detectors ───────────────────────
+
+
+class TestOracleReportLevelDetectors:
+    """New detectors added in Phase 2 must stay out of classify()."""
+
+    @staticmethod
+    def _schema() -> DatabaseSchema:
+        return DatabaseSchema(
+            tables=[
+                TableMetadata(
+                    name="PEDIDOS",
+                    columns=[
+                        ColumnMetadata(name="ID", data_type="NUMBER", nullable=False),
+                        ColumnMetadata(name="CLIENTE_ID", data_type="NUMBER", nullable=True),
+                        ColumnMetadata(name="FECHA_PEDIDO", data_type="DATE", nullable=True),
+                    ],
+                    row_count_approx=2_000_000,
+                ),
+                TableMetadata(
+                    name="LOGS",
+                    columns=[
+                        ColumnMetadata(name="ID", data_type="NUMBER", nullable=False),
+                        ColumnMetadata(name="FECHA_EVENTO", data_type="DATE", nullable=True),
+                        ColumnMetadata(name="DESCRIPCION", data_type="VARCHAR2", data_length=4000, nullable=True),
+                        ColumnMetadata(name="PAYLOAD", data_type="LONG", nullable=True),
+                    ],
+                    row_count_approx=100,
+                ),
+            ],
+            fk_columns={"PEDIDOS": {"FK_CLIENTE": ["CLIENTE_ID"]}},
+            index_columns={"PEDIDOS": {"IDX_ID": ["ID"]}},
+            table_statistics={
+                "PEDIDOS": {"stale_stats": True, "num_rows": 2_000_000, "last_analyzed": None},
+                "LOGS": {"stale_stats": False, "num_rows": 100, "last_analyzed": None},
+            },
+            constraint_status={
+                "PEDIDOS": [
+                    {"name": "CHK_ESTADO", "type": "C", "status": "DISABLED", "validated": "NOT VALIDATED"},
+                ]
+            },
+        )
+
+    def test_fk_without_index_detected(self) -> None:
+        results = TableRuleEngine().detect_fk_without_index(self._schema())
+        assert len(results) == 1
+        assert results[0].predicted_label == "fk_without_index"
+        assert results[0].table_name == "PEDIDOS"
+
+    def test_fk_without_index_not_in_classify(self) -> None:
+        results = TableRuleEngine().classify(schema=self._schema())
+        assert all(r.predicted_label != "fk_without_index" for r in results)
+
+    def test_stale_statistics_detected(self) -> None:
+        results = TableRuleEngine().detect_stale_statistics(self._schema())
+        labels = {r.table_name: r.predicted_label for r in results}
+        assert labels.get("PEDIDOS") == "stale_statistics"
+        assert "LOGS" not in labels
+
+    def test_stale_statistics_naive_last_analyzed(self) -> None:
+        # Oracle DATE -> isoformat() yields a naive string (no offset); must not crash.
+        schema = self._schema()
+        schema.table_statistics["PEDIDOS"] = {
+            "stale_stats": False,
+            "num_rows": 2_000_000,
+            "last_analyzed": "2024-01-01T12:00:00",
+        }
+        results = TableRuleEngine().detect_stale_statistics(schema)
+        assert any(r.table_name == "PEDIDOS" and r.predicted_label == "stale_statistics" for r in results)
+
+    def test_disabled_constraint_detected(self) -> None:
+        results = TableRuleEngine().detect_disabled_constraints(self._schema())
+        assert len(results) == 1
+        assert results[0].predicted_label == "disabled_constraint"
+
+    def test_partition_candidate_detected(self) -> None:
+        results = TableRuleEngine().detect_partition_candidates(self._schema())
+        assert len(results) == 1
+        assert results[0].predicted_label == "partition_candidate"
+        assert results[0].table_name == "PEDIDOS"
+
+    def test_obsolete_type_detected(self) -> None:
+        cols = [c for t in self._schema().tables for c in t.columns]
+        results = ColumnRuleEngine().detect_obsolete_types(cols, self._schema())
+        assert len(results) == 1
+        assert results[0].predicted_label == "obsolete_type"
+        assert results[0].column_name == "PAYLOAD"
+
+    def test_oversized_varchar_with_sample(self) -> None:
+        schema = self._schema()
+
+        def sample_fn(table: str, col: str) -> int | None:
+            return 12 if col == "DESCRIPCION" else None
+
+        cols = [c for t in schema.tables for c in t.columns]
+        results = ColumnRuleEngine().detect_oversized_varchars(cols, schema, sample_fn=sample_fn)
+        assert len(results) == 1
+        assert results[0].predicted_label == "oversized_varchar"
+        assert results[0].column_name == "DESCRIPCION"
+
+    def test_oversized_varchar_heuristic_without_sample(self) -> None:
+        schema = DatabaseSchema(
+            tables=[
+                TableMetadata(
+                    name="FLAGS",
+                    columns=[
+                        ColumnMetadata(name="ID", data_type="NUMBER", nullable=False),
+                        ColumnMetadata(name="FLAG_ACTIVO", data_type="VARCHAR2", data_length=4000, nullable=True),
+                    ],
+                )
+            ]
+        )
+        cols = schema.tables[0].columns
+        results = ColumnRuleEngine().detect_oversized_varchars(cols, schema)
+        assert len(results) == 1
+        assert results[0].column_name == "FLAG_ACTIVO"

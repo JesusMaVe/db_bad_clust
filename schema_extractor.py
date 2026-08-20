@@ -86,6 +86,14 @@ class DatabaseSchema:
     # SchemaSpy-style signal: (table, column, single_index, composite_index)
     redundant_indexes: list[tuple[str, str, str, str]] = field(default_factory=list)
 
+    # Extended metadata for Oracle-specific detectors (Phase 2).
+    # These are populated by SchemaExtractor and kept in-memory; they are not
+    # serialized by to_dict() to preserve the existing public shape.
+    fk_columns: dict[str, dict[str, list[str]]] = field(default_factory=dict)
+    index_columns: dict[str, dict[str, list[str]]] = field(default_factory=dict)
+    table_statistics: dict[str, dict[str, Any]] = field(default_factory=dict)
+    constraint_status: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+
     def table_names(self) -> list[str]:
         """Return the list of table names."""
         return [t.name for t in self.tables]
@@ -133,20 +141,27 @@ class SchemaExtractor:
             SchemaError: If any query against the data dictionary fails.
         """
         try:
-            table_names = self._get_table_names()
-            if not table_names:
+            tables_info = self._get_tables()
+            if not tables_info:
                 return DatabaseSchema(tables=[])
 
             columns_by_table = self._get_all_columns()
             pk_by_table = self._get_all_constraints("P")
             unique_by_table = self._get_all_constraints("U")
             fk_by_table = self._get_all_foreign_keys()
-            indexed_by_table = self._get_all_indexed_columns()
             table_comments = self._get_table_comments()
             col_comments = self._get_column_comments()
+            fk_columns = self._get_fk_columns()
+            index_columns = self._get_index_columns()
+            indexed_by_table = {
+                tname: {col for cols in idxs.values() for col in cols}
+                for tname, idxs in index_columns.items()
+            }
+            table_statistics = self._get_table_statistics()
+            constraint_status = self._get_constraint_status()
 
             tables: list[TableMetadata] = []
-            for tname in table_names:
+            for tname, num_rows in tables_info:
                 columns = columns_by_table.get(tname, [])
                 pk_cols = pk_by_table.get(tname, set())
                 unique_cols = unique_by_table.get(tname, set())
@@ -170,6 +185,7 @@ class SchemaExtractor:
                         name=tname,
                         columns=columns,
                         table_comment=table_comments.get(tname),
+                        row_count_approx=num_rows,
                     )
                 )
 
@@ -181,16 +197,20 @@ class SchemaExtractor:
             return DatabaseSchema(
                 tables=tables,
                 redundant_indexes=self.get_redundant_indexes(),
+                fk_columns=fk_columns,
+                index_columns=index_columns,
+                table_statistics=table_statistics,
+                constraint_status=constraint_status,
             )
         except oracledb.Error as exc:
             raise SchemaError(f"Failed to extract schema: {exc}") from exc
 
     # ── Bulk data dictionary queries (one per view, grouped in Python) ─
 
-    def _get_table_names(self) -> list[str]:
-        """Return table names for the current user."""
-        self.cursor.execute("SELECT table_name FROM user_tables ORDER BY table_name")
-        return [row[0] for row in self.cursor.fetchall()]
+    def _get_tables(self) -> list[tuple[str, int | None]]:
+        """Return table names and approximate row counts for the current user."""
+        self.cursor.execute("SELECT table_name, num_rows FROM user_tables ORDER BY table_name")
+        return [(row[0], row[1]) for row in self.cursor.fetchall()]
 
     def _get_all_columns(self) -> dict[str, list[ColumnMetadata]]:
         """Return columns for all tables, grouped by table name.
@@ -278,16 +298,6 @@ class SchemaExtractor:
             }
         return result
 
-    def _get_all_indexed_columns(self) -> dict[str, set[str]]:
-        """Return {table_name -> {column_name}} for indexed columns."""
-        self.cursor.execute(
-            "SELECT table_name, column_name FROM user_ind_columns"
-        )
-        result: dict[str, set[str]] = {}
-        for table_name, column_name in self.cursor.fetchall():
-            result.setdefault(table_name, set()).add(column_name)
-        return result
-
     def get_redundant_indexes(self) -> list[tuple[str, str, str, str]]:
         """Return redundant index pairs: a composite index whose leading
         column already has a single-column index (SchemaSpy-style signal).
@@ -321,6 +331,77 @@ class SchemaExtractor:
                 if single:
                     redundant.append((tname, leading, single, iname))
         return redundant
+
+    def _get_fk_columns(self) -> dict[str, dict[str, list[str]]]:
+        """Return {table_name -> {fk_name -> [col1, col2, ...]}} ordered."""
+        self.cursor.execute(
+            """
+            SELECT c.table_name, c.constraint_name, cc.column_name, cc.position
+            FROM user_constraints c
+            JOIN user_cons_columns cc
+              ON c.constraint_name = cc.constraint_name
+            WHERE c.constraint_type = 'R'
+            ORDER BY c.table_name, c.constraint_name, cc.position
+            """
+        )
+        result: dict[str, dict[str, list[str]]] = {}
+        for table_name, constraint_name, column_name, _position in self.cursor.fetchall():
+            result.setdefault(table_name, {}).setdefault(constraint_name, []).append(column_name)
+        return result
+
+    def _get_index_columns(self) -> dict[str, dict[str, list[str]]]:
+        """Return {table_name -> {index_name -> [col1, col2, ...]}} ordered."""
+        self.cursor.execute(
+            """
+            SELECT table_name, index_name, column_name, column_position
+            FROM user_ind_columns
+            ORDER BY table_name, index_name, column_position
+            """
+        )
+        result: dict[str, dict[str, list[str]]] = {}
+        for table_name, index_name, column_name, _position in self.cursor.fetchall():
+            result.setdefault(table_name, {}).setdefault(index_name, []).append(column_name)
+        return result
+
+    def _get_table_statistics(self) -> dict[str, dict[str, Any]]:
+        """Return {table_name -> {stale_stats, num_rows, last_analyzed}}."""
+        self.cursor.execute(
+            """
+            SELECT table_name, stale_stats, num_rows, last_analyzed
+            FROM user_tab_statistics
+            """
+        )
+        result: dict[str, dict[str, Any]] = {}
+        for table_name, stale_stats, num_rows, last_analyzed in self.cursor.fetchall():
+            result[table_name] = {
+                "stale_stats": stale_stats == "YES",
+                "num_rows": num_rows,
+                "last_analyzed": last_analyzed.isoformat() if last_analyzed else None,
+            }
+        return result
+
+    def _get_constraint_status(self) -> dict[str, list[dict[str, Any]]]:
+        """Return {table_name -> [{name, type, status, validated}]} for
+        constraints that are disabled or not validated."""
+        self.cursor.execute(
+            """
+            SELECT table_name, constraint_name, constraint_type, status, validated
+            FROM user_constraints
+            """
+        )
+        result: dict[str, list[dict[str, Any]]] = {}
+        for table_name, cname, ctype, status, validated in self.cursor.fetchall():
+            if status == "ENABLED" and validated == "VALIDATED":
+                continue
+            result.setdefault(table_name, []).append(
+                {
+                    "name": cname,
+                    "type": ctype,
+                    "status": status,
+                    "validated": validated,
+                }
+            )
+        return result
 
     def _get_table_comments(self) -> dict[str, str]:
         """Return {table_name -> comment} for tables that have one."""

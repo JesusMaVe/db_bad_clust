@@ -22,8 +22,10 @@ Usage:
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from enum import Enum
+from typing import Any
 
 from schema_extractor import ColumnMetadata, DatabaseSchema, TableMetadata
 from structural_encoder import ORACLE_TYPE_MAP
@@ -64,6 +66,7 @@ class ClassificationResult:
     fix: str
     needs_review: bool
     severity: Severity = Severity.MEDIUM
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -457,46 +460,51 @@ class ColumnRuleEngine:
         if not schema:
             return results
 
-        for table in schema.tables:
-            for col in table.columns:
-                # Case 1: Explicit FK to same table
-                if col.is_foreign_key and col.fk_references_table:
-                    if col.fk_references_table == table.name:
-                        results.append(
-                            ClassificationResult(
-                                column_name=col.name,
-                                table_name=table.name,
-                                predicted_label="self_referencing",
-                                confidence=0.95,
-                                severity=Severity.MEDIUM,
-                                method="rule_engine",
-                                explanation=(
-                                    f"FK '{col.name}' references its own table "
-                                    f"'{table.name}'."
-                                ),
-                                fix="Valid for hierarchies, but verify intent.",
-                                needs_review=True,
-                            )
-                        )
-                        continue
+        if not columns:
+            columns = [c for t in schema.tables for c in t.columns]
 
-                # Case 2: Heuristic fallback - name suggests self-reference
-                if col.name.lower() in SELF_REF_NAMES:
-                    results.append(
-                        ClassificationResult(
-                            column_name=col.name,
-                            table_name=table.name,
-                            predicted_label="self_referencing",
-                            confidence=0.7,
-                            severity=Severity.MEDIUM,
-                            method="rule_engine",
-                            explanation=(
-                                f"Column '{col.name}' name suggests self-referencing FK."
-                            ),
-                            fix="Verify if this is a self-referencing hierarchy.",
-                            needs_review=True,
-                        )
+        for col in columns:
+            table_name = self._table_for(col)
+            if not table_name:
+                continue
+
+            # Case 1: Explicit FK to same table
+            if col.is_foreign_key and col.fk_references_table == table_name:
+                results.append(
+                    ClassificationResult(
+                        column_name=col.name,
+                        table_name=table_name,
+                        predicted_label="self_referencing",
+                        confidence=0.95,
+                        severity=Severity.MEDIUM,
+                        method="rule_engine",
+                        explanation=(
+                            f"FK '{col.name}' references its own table "
+                            f"'{table_name}'."
+                        ),
+                        fix="Valid for hierarchies, but verify intent.",
+                        needs_review=True,
                     )
+                )
+                continue
+
+            # Case 2: Heuristic fallback - name suggests self-reference
+            if col.name.lower() in SELF_REF_NAMES:
+                results.append(
+                    ClassificationResult(
+                        column_name=col.name,
+                        table_name=table_name,
+                        predicted_label="self_referencing",
+                        confidence=0.7,
+                        severity=Severity.MEDIUM,
+                        method="rule_engine",
+                        explanation=(
+                            f"Column '{col.name}' name suggests self-referencing FK."
+                        ),
+                        fix="Verify if this is a self-referencing hierarchy.",
+                        needs_review=True,
+                    )
+                )
 
         return results
 
@@ -508,15 +516,14 @@ class ColumnRuleEngine:
         """Detect primary key that allows NULL or FK without reference."""
         results: list[ClassificationResult] = []
 
+        if not columns and schema:
+            columns = [c for t in schema.tables for c in t.columns]
+
         for col in columns:
+            table_name = self._table_for(col) if schema else ""
+
             # PK + NULL = impossible
             if col.is_primary_key and col.nullable:
-                table_name = ""
-                if schema:
-                    for table in schema.tables:
-                        if col in table.columns:
-                            table_name = table.name
-                            break
                 results.append(
                     ClassificationResult(
                         column_name=col.name,
@@ -536,12 +543,6 @@ class ColumnRuleEngine:
 
             # FK without reference column
             if col.is_foreign_key and not col.fk_references_column:
-                table_name = ""
-                if schema:
-                    for table in schema.tables:
-                        if col in table.columns:
-                            table_name = table.name
-                            break
                 results.append(
                     ClassificationResult(
                         column_name=col.name,
@@ -571,29 +572,33 @@ class ColumnRuleEngine:
         if not schema:
             return results
 
-        for table in schema.tables:
-            for col in table.columns:
-                name_upper = col.name.upper()
-                if name_upper in POLYMORPHIC_TYPE_NAMES:
-                    results.append(
-                        ClassificationResult(
-                            column_name=col.name,
-                            table_name=table.name,
-                            predicted_label="polymorphic",
-                            confidence=0.75,
-                            severity=Severity.MEDIUM,
-                            method="rule_engine",
-                            explanation=(
-                                f"Column '{col.name}' in table '{table.name}' appears to be a "
-                                f"type discriminator, suggesting a polymorphic association."
-                            ),
-                            fix=(
-                                "Use separate tables per type or add a foreign key constraint "
-                                "to the referenced table per type."
-                            ),
-                            needs_review=True,
-                        )
+        if not columns:
+            columns = [c for t in schema.tables for c in t.columns]
+
+        for col in columns:
+            table_name = self._table_for(col)
+            if not table_name:
+                continue
+            if col.name.upper() in POLYMORPHIC_TYPE_NAMES:
+                results.append(
+                    ClassificationResult(
+                        column_name=col.name,
+                        table_name=table_name,
+                        predicted_label="polymorphic",
+                        confidence=0.75,
+                        severity=Severity.MEDIUM,
+                        method="rule_engine",
+                        explanation=(
+                            f"Column '{col.name}' in table '{table_name}' appears to be a "
+                            f"type discriminator, suggesting a polymorphic association."
+                        ),
+                        fix=(
+                            "Use separate tables per type or add a foreign key constraint "
+                            "to the referenced table per type."
+                        ),
+                        needs_review=True,
                     )
+                )
 
         return results
 
@@ -662,7 +667,125 @@ class ColumnRuleEngine:
 
         return results
 
-    # ── Rule 9: wrong_data_types ────────────────────────────────────────
+    # ── Rule 9: obsolete Oracle types (report-level column signal) ───────
+
+    def detect_obsolete_types(
+        self, columns: list[ColumnMetadata], schema: DatabaseSchema | None
+    ) -> list[ClassificationResult]:
+        """Detect deprecated or unusual Oracle types (LONG, LONG RAW, RAW).
+
+        Report-level finding: not part of classify() to avoid introducing
+        new column labels into the existing 10-class evaluation.
+        """
+        results: list[ClassificationResult] = []
+        obsolete = {"LONG", "LONG RAW", "RAW"}
+
+        for table in (schema.tables if schema else []):
+            for col in table.columns:
+                base_type = col.data_type.upper().split("(")[0].strip()
+                if base_type in obsolete:
+                    results.append(
+                        ClassificationResult(
+                            column_name=col.name,
+                            table_name=table.name,
+                            predicted_label="obsolete_type",
+                            confidence=0.9,
+                            severity=Severity.HIGH,
+                            method="rule_engine",
+                            explanation=(
+                                f"Column '{col.name}' uses deprecated type {col.data_type}."
+                            ),
+                            fix="Convert to CLOB/BLOB or standard VARCHAR2/NUMBER.",
+                            needs_review=True,
+                            metadata={"source_type": col.data_type},
+                        )
+                    )
+        return results
+
+    # ── Rule 10: oversized VARCHAR2 (report-level column signal) ─────────
+
+    def detect_oversized_varchars(
+        self,
+        columns: list[ColumnMetadata],
+        schema: DatabaseSchema | None,
+        sample_fn: Callable[[str, str], int | None] | None = None,
+    ) -> list[ClassificationResult]:
+        """Detect VARCHAR2/CHAR columns whose declared size far exceeds use.
+
+        If sample_fn(table_name, column_name) returns the actual maximum
+        length observed in data, flag columns where actual < declared/10.
+        Without sample_fn, a conservative heuristic flags short-domain
+        columns (flags, codes, types) declared wider than 100 chars.
+
+        Report-level finding: not part of classify().
+        """
+        results: list[ClassificationResult] = []
+        short_domain_words = {
+            "flag", "ind", "activo", "estado", "tipo", "codigo", "code",
+            "status", "s_n", "si_no", "yes_no", "y_n", "true_false", "t_f",
+        }
+
+        for table in (schema.tables if schema else []):
+            for col in table.columns:
+                base_type = col.data_type.upper().split("(")[0].strip()
+                if base_type not in {"VARCHAR", "VARCHAR2", "CHAR"}:
+                    continue
+
+                declared = col.data_length
+                if declared is None:
+                    continue
+
+                if sample_fn is not None:
+                    actual_max = sample_fn(table.name, col.name)
+                    if actual_max is None:
+                        continue
+                    if actual_max > 0 and actual_max < declared / 10:
+                        results.append(
+                            ClassificationResult(
+                                column_name=col.name,
+                                table_name=table.name,
+                                predicted_label="oversized_varchar",
+                                confidence=0.85,
+                                severity=Severity.LOW,
+                                method="rule_engine",
+                                explanation=(
+                                    f"Declared {col.data_type} but sampled max length is {actual_max}."
+                                ),
+                                fix=f"Consider reducing to VARCHAR2({max(actual_max, 1)}).",
+                                needs_review=True,
+                                metadata={
+                                    "declared_length": declared,
+                                    "actual_max_length": actual_max,
+                                    "suggested_size": max(actual_max, 1),
+                                },
+                            )
+                        )
+                else:
+                    name_lower = col.name.lower().replace("-", "_")
+                    words = set(name_lower.split("_"))
+                    if words & short_domain_words and declared > 100:
+                        results.append(
+                            ClassificationResult(
+                                column_name=col.name,
+                                table_name=table.name,
+                                predicted_label="oversized_varchar",
+                                confidence=0.6,
+                                severity=Severity.LOW,
+                                method="rule_engine",
+                                explanation=(
+                                    f"Short-domain column '{col.name}' declared as {col.data_type}."
+                                ),
+                                fix="Verify actual data length and reduce size if possible.",
+                                needs_review=True,
+                                metadata={
+                                    "declared_length": declared,
+                                    "suggested_size": 100,
+                                },
+                            )
+                        )
+        return results
+
+    # ── Rule 11: wrong_data_types ───────────────────────────────────────
 
     def _rule_wrong_data_types(
         self, columns: list[ColumnMetadata], schema: DatabaseSchema | None
@@ -1010,12 +1133,255 @@ class TableRuleEngine:
                     ),
                     fix=f"Drop the redundant index {single_idx} or extend it.",
                     needs_review=True,
+                    metadata={
+                        "single_index": single_idx,
+                        "composite_index": composite_idx,
+                        "column": column_name,
+                    },
                 )
             )
 
         return results
 
-    # ── Rule 6: wrong_data_types ────────────────────────────────────────
+    # ── Rule 6: foreign key without index (report-level table signal) ─────
+
+    def detect_fk_without_index(
+        self, schema: DatabaseSchema
+    ) -> list[ClassificationResult]:
+        """Detect FK constraints whose columns are not covered by an index.
+
+        In Oracle, unindexed FKs on the child table cause lock escalation
+        when the parent PK is updated/deleted. The covering index must start
+        with the FK columns in the same order.
+
+        Report-level finding: not part of classify().
+        """
+        results: list[ClassificationResult] = []
+        fk_columns = getattr(schema, "fk_columns", None) or {}
+        index_columns = getattr(schema, "index_columns", None) or {}
+
+        for table_name, fks in fk_columns.items():
+            indexes = index_columns.get(table_name, {})
+            for fk_name, fk_cols in fks.items():
+                covered = any(
+                    idx_cols[: len(fk_cols)] == fk_cols for idx_cols in indexes.values()
+                )
+                if not covered:
+                    results.append(
+                        ClassificationResult(
+                            column_name=", ".join(fk_cols),
+                            table_name=table_name,
+                            predicted_label="fk_without_index",
+                            confidence=0.9,
+                            severity=Severity.HIGH,
+                            method="rule_engine",
+                            explanation=(
+                                f"FK {fk_name} on ({', '.join(fk_cols)}) has no covering index."
+                            ),
+                            fix=f"CREATE INDEX idx_{table_name.lower()}_{'_'.join(c.lower() for c in fk_cols)} ON {table_name}({', '.join(fk_cols)});",
+                            needs_review=True,
+                            metadata={"fk_name": fk_name, "fk_columns": fk_cols},
+                        )
+                    )
+        return results
+
+    # ── Rule 7: stale or missing statistics (report-level table signal) ───
+
+    STALE_STATS_DAYS = 30
+
+    def detect_stale_statistics(
+        self, schema: DatabaseSchema
+    ) -> list[ClassificationResult]:
+        """Detect tables with stale or missing Optimizer statistics.
+
+        Report-level finding: not part of classify().
+        """
+        from datetime import UTC, datetime, timedelta
+
+        results: list[ClassificationResult] = []
+        stats = getattr(schema, "table_statistics", None) or {}
+        cutoff = datetime.now(UTC) - timedelta(days=self.STALE_STATS_DAYS)
+
+        for table in schema.tables:
+            table_stats = stats.get(table.name)
+            if table_stats is None:
+                results.append(
+                    ClassificationResult(
+                        column_name="*",
+                        table_name=table.name,
+                        predicted_label="stale_statistics",
+                        confidence=0.8,
+                        severity=Severity.MEDIUM,
+                        method="rule_engine",
+                        explanation=f"Table '{table.name}' has no Optimizer statistics.",
+                        fix=f"EXEC DBMS_STATS.GATHER_TABLE_STATS('{table.name}');",
+                        needs_review=True,
+                        metadata={"num_rows": table_stats.get("num_rows") if table_stats else None, "reason": "missing"},
+                    )
+                )
+                continue
+
+            if table_stats.get("stale_stats"):
+                results.append(
+                    ClassificationResult(
+                        column_name="*",
+                        table_name=table.name,
+                        predicted_label="stale_statistics",
+                        confidence=0.9,
+                        severity=Severity.HIGH,
+                        method="rule_engine",
+                        explanation=f"Table '{table.name}' has stale statistics.",
+                        fix=f"EXEC DBMS_STATS.GATHER_TABLE_STATS('{table.name}');",
+                        needs_review=True,
+                        metadata={"num_rows": table_stats.get("num_rows"), "reason": "stale"},
+                    )
+                )
+                continue
+
+            last = table_stats.get("last_analyzed")
+            if last and isinstance(last, str):
+                try:
+                    last_dt = datetime.fromisoformat(last.replace("Z", "+00:00"))
+                    if last_dt.tzinfo is None:
+                        last_dt = last_dt.replace(tzinfo=UTC)
+                    if last_dt < cutoff:
+                        results.append(
+                            ClassificationResult(
+                                column_name="*",
+                                table_name=table.name,
+                                predicted_label="stale_statistics",
+                                confidence=0.75,
+                                severity=Severity.MEDIUM,
+                                method="rule_engine",
+                                explanation=(
+                                    f"Table '{table.name}' was last analyzed more than "
+                                    f"{self.STALE_STATS_DAYS} days ago."
+                                ),
+                                fix=f"EXEC DBMS_STATS.GATHER_TABLE_STATS('{table.name}');",
+                                needs_review=True,
+                                metadata={"num_rows": table_stats.get("num_rows"), "reason": "old"},
+                            )
+                        )
+                except ValueError:
+                    pass
+        return results
+
+    # ── Rule 8: disabled / not-validated constraints (report-level) ───────
+
+    def detect_disabled_constraints(
+        self, schema: DatabaseSchema
+    ) -> list[ClassificationResult]:
+        """Detect constraints that are disabled or not validated.
+
+        Report-level finding: not part of classify().
+        """
+        results: list[ClassificationResult] = []
+        constraint_status = getattr(schema, "constraint_status", None) or {}
+
+        for table_name, constraints in constraint_status.items():
+            for c in constraints:
+                if c["status"] == "DISABLED":
+                    results.append(
+                        ClassificationResult(
+                            column_name="*",
+                            table_name=table_name,
+                            predicted_label="disabled_constraint",
+                            confidence=0.9,
+                            severity=Severity.HIGH,
+                            method="rule_engine",
+                            explanation=(
+                                f"Constraint {c['name']} ({c['type']}) is disabled."
+                            ),
+                            fix=(
+                                f"ALTER TABLE {table_name} ENABLE VALIDATE CONSTRAINT {c['name']};"
+                            ),
+                            needs_review=True,
+                            metadata={
+                                "constraint_name": c["name"],
+                                "constraint_type": c["type"],
+                                "status": c["status"],
+                                "validated": c["validated"],
+                            },
+                        )
+                    )
+                elif c["validated"] != "VALIDATED":
+                    results.append(
+                        ClassificationResult(
+                            column_name="*",
+                            table_name=table_name,
+                            predicted_label="disabled_constraint",
+                            confidence=0.85,
+                            severity=Severity.MEDIUM,
+                            method="rule_engine",
+                            explanation=(
+                                f"Constraint {c['name']} ({c['type']}) is not validated."
+                            ),
+                            fix=(
+                                f"ALTER TABLE {table_name} VALIDATE CONSTRAINT {c['name']};"
+                            ),
+                            needs_review=True,
+                            metadata={
+                                "constraint_name": c["name"],
+                                "constraint_type": c["type"],
+                                "status": c["status"],
+                                "validated": c["validated"],
+                            },
+                        )
+                    )
+        return results
+
+    # ── Rule 9: partitioning candidates (report-level table signal) ───────
+
+    PARTITION_ROW_THRESHOLD = 1_000_000
+
+    def detect_partition_candidates(
+        self, schema: DatabaseSchema
+    ) -> list[ClassificationResult]:
+        """Suggest partitioning for very large tables with date columns.
+
+        Report-level finding: not part of classify().
+        """
+        results: list[ClassificationResult] = []
+        stats = getattr(schema, "table_statistics", None) or {}
+
+        for table in schema.tables:
+            num_rows = stats.get(table.name, {}).get("num_rows")
+            if num_rows is None:
+                num_rows = table.row_count_approx
+            if num_rows is None or num_rows < self.PARTITION_ROW_THRESHOLD:
+                continue
+
+            date_cols = [
+                c.name
+                for c in table.columns
+                if any(kw in c.name.lower() for kw in {"fecha", "date", "time", "created", "modified"})
+                and c.data_type.upper().startswith(("DATE", "TIMESTAMP"))
+            ]
+            if not date_cols:
+                continue
+
+            results.append(
+                ClassificationResult(
+                    column_name=", ".join(date_cols),
+                    table_name=table.name,
+                    predicted_label="partition_candidate",
+                    confidence=0.7,
+                    severity=Severity.MEDIUM,
+                    method="rule_engine",
+                    explanation=(
+                        f"Table '{table.name}' has ~{num_rows} rows and date columns "
+                        f"({', '.join(date_cols)}); evaluate range partitioning."
+                    ),
+                    fix=(
+                        f"Consider CREATE TABLE ... PARTITION BY RANGE ({date_cols[0]}) ..."
+                    ),
+                    needs_review=True,
+                    metadata={"num_rows": num_rows, "date_columns": date_cols},
+                )
+            )
+        return results
+
+    # ── Rule 10: wrong_data_types ────────────────────────────────────────
 
     WRONG_DATA_TYPES_THRESHOLD = 20
 

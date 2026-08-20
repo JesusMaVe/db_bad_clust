@@ -28,7 +28,7 @@ class FakeCursor:
         self.executed.append(sql)
         sql_l = sql.lower()
         if "from user_tables" in sql_l:
-            self._rows = [("EMPLEADOS",), ("CONFIGURACION",)]
+            self._rows = [("EMPLEADOS", 100), ("CONFIGURACION", 5)]
         elif "from user_tab_cols" in sql_l:
             self._rows = [
                 ("EMPLEADOS", "ID", "NUMBER", "N", 22, None, 0, None, "YES", "NO"),
@@ -38,20 +38,35 @@ class FakeCursor:
         elif "constraint_type = :ctype" in sql_l:
             # PK: EMPLEADOS.ID / U: none
             self._rows = [("EMPLEADOS", "ID")] if kwargs.get("ctype") == "P" else []
-        elif "constraint_type = 'r'" in sql_l:
+        elif "constraint_type = 'r'" in sql_l and "r_constraint_name" in sql_l:
+            # Existing FK reference lookup (with c2.table_name / cc2.column_name)
             self._rows = [
                 ("EMPLEADOS", "EMAIL", "CONFIGURACION", "CLAVE", "FK_EMAIL")
             ]
+        elif "constraint_type = 'r'" in sql_l:
+            # Ordered FK columns (new in Phase 2)
+            self._rows = [("EMPLEADOS", "FK_EMAIL", "EMAIL", 1)]
         elif "user_ind_columns" in sql_l:
-            if "column_position" in sql_l:
-                # Redundant-index query (4 columns)
+            # Both _get_index_columns() and get_redundant_indexes() use 4 columns.
+            # Column order distinguishes the two callers.
+            if "index_name, column_name" in sql_l:
+                self._rows = [
+                    ("EMPLEADOS", "IDX_EMP_0", "ID", 1),
+                    ("EMPLEADOS", "IDX_EMP_RED", "ID", 1),
+                    ("EMPLEADOS", "IDX_EMP_RED", "ACTIVO", 2),
+                    ("EMPLEADOS", "IDX_EMAIL", "EMAIL", 1),
+                ]
+            else:
+                # get_redundant_indexes order: table_name, column_name, index_name, column_position
                 self._rows = [
                     ("EMPLEADOS", "ID", "IDX_EMP_0", 1),
                     ("EMPLEADOS", "ID", "IDX_EMP_RED", 1),
                     ("EMPLEADOS", "ACTIVO", "IDX_EMP_RED", 2),
                 ]
-            else:
-                self._rows = [("EMPLEADOS", "EMAIL")]
+        elif "user_tab_statistics" in sql_l:
+            self._rows = [("EMPLEADOS", "NO", 100, None), ("CONFIGURACION", "NO", 5, None)]
+        elif "status, validated" in sql_l:
+            self._rows = []
         elif "user_tab_comments" in sql_l:
             self._rows = [("EMPLEADOS", "Tabla de empleados")]
         elif "user_col_comments" in sql_l:
@@ -84,10 +99,10 @@ def schema():
 
 class TestBulkExtraction:
     def test_no_n_plus_one(self):
-        """Exactly 9 dictionary queries total (8 views + redundant-index scan)."""
+        """Exactly 12 dictionary queries total (bulk, no per-table N+1)."""
         conn = FakeConnection()
         SchemaExtractor(conn).extract_all()  # type: ignore[arg-type]
-        assert len(conn._cursor.executed) == 9
+        assert len(conn._cursor.executed) == 12
         assert not any(":table_name" in s for s in conn._cursor.executed)
 
     def test_tables_and_columns(self, schema):

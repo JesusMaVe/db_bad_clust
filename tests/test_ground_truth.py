@@ -16,13 +16,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from anti_patterns import AntiPatternTable, generate_poorly_designed_tables
+from anti_patterns import generate_poorly_designed_tables
 from ground_truth import (
     LABEL_CLEAN,
     build_ground_truth_map,
     get_ground_truth,
+    load_manual_ground_truth,
 )
-
 
 # ── build_ground_truth_map ────────────────────────────────────────────────
 
@@ -48,6 +48,7 @@ class TestBuildGroundTruthMap:
             "wrong_data_types", "reserved_words", "self_contradictory",
             "impossible_data", "self_referencing", "polymorphic",
             "giant_table", "inconsistent_naming", "eav", LABEL_CLEAN,
+            "bad_boolean", "number_as_text",
         }
         assert values.issubset(valid_labels)
 
@@ -70,7 +71,8 @@ class TestBuildGroundTruthMap:
     def test_polymorphic_detected(self) -> None:
         """Polymorphic columns are detected."""
         gt = build_ground_truth_map()
-        assert gt["TODO_EN_UNO.TIPO_REGISTRO"] == "polymorphic"
+        assert gt["TRANSACCIONES.TIPO"] == "polymorphic"
+        assert gt["METADATA.TIPO_DATO"] == "polymorphic"
 
     def test_eav_columns(self) -> None:
         """EAV table columns are flagged as eav."""
@@ -102,9 +104,43 @@ class TestBuildGroundTruthMap:
         assert gt["PRODUCTOS.SKU"] == "clean"
 
     def test_impossible_data(self) -> None:
-        """Impossible data columns are detected."""
+        """Impossible data columns are detected (FK without reference)."""
         gt = build_ground_truth_map()
-        assert gt["TRANSACCIONES.ID"] == "impossible_data"
+        assert gt["AUDITORIA_LOG.REGISTRO_ID"] == "impossible_data"
+        assert gt["EMPLEADOS.DEPARTAMENTO"] == "impossible_data"
+
+
+# ── load_manual_ground_truth ─────────────────────────────────────────────
+
+
+class TestLoadManualGroundTruth:
+    """Manual CSV label loading."""
+
+    def test_loads_filled_csv(self, tmp_path) -> None:
+        p = tmp_path / "labels.csv"
+        p.write_text("table,column,data_type,label\nEMPLEADOS,SALARIO,VARCHAR2,wrong_data_types\nPROVEEDORES,ID,NUMBER,clean\n")
+        gt = load_manual_ground_truth(p)
+        assert gt == {"EMPLEADOS.SALARIO": "wrong_data_types", "PROVEEDORES.ID": "clean"}
+
+    def test_rejects_empty_label(self, tmp_path) -> None:
+        p = tmp_path / "labels.csv"
+        p.write_text("table,column,data_type,label\nEMPLEADOS,SALARIO,VARCHAR2,\n")
+        try:
+            load_manual_ground_truth(p)
+        except ValueError as e:
+            assert "Empty label" in str(e)
+        else:
+            raise AssertionError("expected ValueError")
+
+    def test_rejects_invalid_label(self, tmp_path) -> None:
+        p = tmp_path / "labels.csv"
+        p.write_text("table,column,data_type,label\nEMPLEADOS,SALARIO,VARCHAR2,nope\n")
+        try:
+            load_manual_ground_truth(p)
+        except ValueError as e:
+            assert "Invalid label" in str(e)
+        else:
+            raise AssertionError("expected ValueError")
 
 
 # ── get_ground_truth ─────────────────────────────────────────────────────

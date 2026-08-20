@@ -39,6 +39,12 @@ ANTI_PATTERN_ACTIONS = {
     "implicit_fk": "Add a FOREIGN KEY constraint to the referenced table;",
     "missing_pk": "Add a PRIMARY KEY constraint on a unique identifier column;",
     "redundant_index": "Drop the redundant index or extend it;",
+    "fk_without_index": "Create a covering index on the foreign-key columns;",
+    "stale_statistics": "Run DBMS_STATS.GATHER_TABLE_STATS on the table;",
+    "disabled_constraint": "Enable and validate the constraint;",
+    "obsolete_type": "Convert LONG/LONG RAW/RAW columns to CLOB/BLOB or standard types;",
+    "partition_candidate": "Evaluate range/list partitioning, typically by date;",
+    "oversized_varchar": "Reduce VARCHAR2 size to match actual data length;",
 }
 
 
@@ -75,10 +81,16 @@ class Recommender:
 
         # SchemaSpy-style report-level findings (not column labels)
         col_results = col_results + self.col_engine.detect_implicit_fks(all_columns, schema)
+        col_results = col_results + self.col_engine.detect_obsolete_types(all_columns, schema)
+        col_results = col_results + self.col_engine.detect_oversized_varchars(all_columns, schema)
         table_results = (
             table_results
             + self.table_engine.detect_missing_pk(schema)
             + self.table_engine.detect_redundant_indexes(schema)
+            + self.table_engine.detect_fk_without_index(schema)
+            + self.table_engine.detect_stale_statistics(schema)
+            + self.table_engine.detect_disabled_constraints(schema)
+            + self.table_engine.detect_partition_candidates(schema)
         )
 
         col_groups = self._group_column_results(col_results)

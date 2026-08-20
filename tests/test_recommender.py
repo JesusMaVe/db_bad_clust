@@ -16,9 +16,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import pytest
-from recommender import Recommender
-from schema_extractor import ColumnMetadata, TableMetadata, DatabaseSchema
 
+from recommender import Recommender
+from schema_extractor import ColumnMetadata, DatabaseSchema, TableMetadata
 
 # ── Fixtures ────────────────────────────────────────────────────────────
 
@@ -316,3 +316,41 @@ class TestPrintRecommendations:
         """Empty recommendations returns 'No anti-patterns detected.'"""
         output = recommender.print_recommendations({"column_issues": [], "table_issues": []})
         assert "No anti-patterns detected" in output
+
+
+class TestPhase2Recommendations:
+    """Phase 2 Oracle-specific detectors surface in recommend()."""
+
+    def test_fk_without_index_in_recommendations(self, recommender: Recommender) -> None:
+        schema = DatabaseSchema(
+            tables=[
+                TableMetadata(
+                    name="PEDIDOS",
+                    columns=[
+                        ColumnMetadata(name="ID", data_type="NUMBER", data_length=22, nullable=False),
+                        ColumnMetadata(name="CLIENTE_ID", data_type="NUMBER", data_length=22, nullable=True),
+                    ],
+                )
+            ],
+            fk_columns={"PEDIDOS": {"FK_CLIENTE": ["CLIENTE_ID"]}},
+            index_columns={"PEDIDOS": {"IDX_ID": ["ID"]}},
+        )
+        result = recommender.recommend(schema)
+        table_labels = [r["label"] for r in result["table_issues"]]
+        assert "fk_without_index" in table_labels
+
+    def test_obsolete_type_in_recommendations(self, recommender: Recommender) -> None:
+        schema = DatabaseSchema(
+            tables=[
+                TableMetadata(
+                    name="LEGACY",
+                    columns=[
+                        ColumnMetadata(name="ID", data_type="NUMBER", data_length=22, nullable=False),
+                        ColumnMetadata(name="TEXTO", data_type="LONG", data_length=0, nullable=True),
+                    ],
+                )
+            ]
+        )
+        result = recommender.recommend(schema)
+        column_labels = [r["label"] for r in result["column_issues"]]
+        assert "obsolete_type" in column_labels

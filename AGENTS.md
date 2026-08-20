@@ -31,7 +31,9 @@ Run in order; each saves a pickle to `output/` for the next:
 1. `notebooks/01_data_preparation.ipynb` — extraction + preprocessing + structural encoding
 2. `notebooks/02_ml_embeddings.ipynb` — sentence embeddings + feature building + reduction
 3. `notebooks/03_classification.ipynb` — Rule Engine + evaluation vs ground truth
-4. `notebooks/04_analysis.ipynb` — metrics + recommendations (writes `output/notebook_results/`)
+4. `notebooks/04_analysis.ipynb` — metrics + recommendations + clustering ARI (writes `output/notebook_results/`)
+
+**Manual ground truth (optional)**: `label_export.py` dumps `output/manual_labels.csv` (empty `label` column) from Oracle; fill labels (vocabulary in `ground_truth.MANUAL_LABEL_VOCABULARY`) and notebook 03 auto-uses them instead of the rule-engine catalog, giving an honest, non-circular evaluation.
 
 Headless (verified):
 
@@ -52,14 +54,15 @@ Notebooks 01+03+04 need Oracle up; 02 needs it only transitively (reads pickle).
 ## Tests & lint
 
 ```bash
-.venv/bin/python -m pytest tests/ -v                 # 458 tests, NO DB required (mock-based)
+.venv/bin/python -m pytest tests/ -v                 # 500 tests, NO DB required (mock-based)
 .venv/bin/python -m pytest tests/test_rule_engine.py::TestSchemaSpySignals -q   # single test
 .venv/bin/python -m ruff check .                     # ~66 pre-existing errors (mostly old tests + rule_engine.py); new code should be lint-clean
 ```
 
 ## Critical invariants (learned the hard way)
 
-- **Keyword lists are duplicated** in `rule_engine.py` and `ground_truth.py` — any change (keyword, exception, matcher) must be applied in BOTH or metrics silently diverge.
+- **Ground truth is rule-engine aligned** — `ground_truth.build_ground_truth_map()` and the generator manifest both run `rule_engine.classify()` on the schema, so detection and truth share label semantics. There is no duplicated keyword logic in `ground_truth.py` anymore (delegates to `rule_engine.py`); keep it that way.
+- **Keyword lists live only in `rule_engine.py`** (and mirror copies in `ddl_generator.py` / `schema_generator.py` for generation) — any change (keyword, exception, matcher) must be applied in all three or generation/metrics silently diverge.
 - **Keyword matching is token-boundary** (`_kw_match`) — substring matching caused false positives ('fec' matched inside 'afectada'). Never revert to `kw in name`.
 - **SchemaSpy detections are report-level** (`detect_missing_pk` / `detect_redundant_indexes` / `detect_implicit_fks` are NOT in the classify() rule chain) — adding them there would mask all other detections (all 23 tables lack PK) and pollute classification metrics.
 - **Column-level date/number_as_text beats table-level inconsistent_naming** in the merge (deliberate; issue #3).
@@ -71,7 +74,7 @@ Notebooks 01+03+04 need Oracle up; 02 needs it only transitively (reads pickle).
 - `SKIP_BERT = True` in notebook 02 → synthetic embeddings (avoids ~470MB MiniLM download). Current pickle was built with real embeddings.
 - Classification weights (notebooks): α=0.15, β=0.35, γ=0.45, δ=0.05
 - Best clustering (re-validated, issue #1): α=0.00, β=0.35, γ=0.45, δ=0.20 + PCA 20D + HDBSCAN → ARI 0.5815
-- Rule Engine: 10 categories, accuracy 0.9465 / F1-macro 0.7938 (243 columns)
+- Rule Engine (aligned GT, circular): accuracy 0.9877 / F1-macro 0.9057 (243 columns); `impossible_data` 0.00 because Oracle extraction loses `fk_references_column`
 - One-Class SVM fallback disabled — worse than rules
 
 ## Gotchas
