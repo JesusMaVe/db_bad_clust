@@ -75,6 +75,7 @@ Notebooks 01+03+04 need Oracle up; 02 needs it only transitively (reads pickle).
 - Classification weights (notebooks): α=0.15, β=0.35, γ=0.45, δ=0.05
 - Best clustering (re-validated, issue #1): α=0.00, β=0.35, γ=0.45, δ=0.20 + PCA 20D + HDBSCAN → ARI 0.5815
 - Rule Engine (aligned GT, circular): accuracy 0.9877 / F1-macro 0.9057 (243 columns); `impossible_data` 0.00 because Oracle extraction loses `fk_references_column`
+- Rule Engine (manual GT, honest): accuracy 0.8642 / F1-macro 0.7745 — weakness = TODO_EN_UNO (giant_table en vez de polymorphic) + impossible_data no detectado + sobredetección de clean
 - One-Class SVM fallback disabled — worse than rules
 
 ## Gotchas
