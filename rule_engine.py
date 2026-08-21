@@ -321,9 +321,9 @@ class ColumnRuleEngine:
     def _rule_wrong_date_as_text(
         self, columns: list[ColumnMetadata], schema: DatabaseSchema | None
     ) -> list[ClassificationResult]:
-        """Detect DATE columns stored as VARCHAR/CHAR."""
+        """Detect DATE columns stored as VARCHAR/CHAR/CLOB."""
         results: list[ClassificationResult] = []
-        canonical_types = set(ORACLE_TYPE_MAP.get(t, t) for t in ["VARCHAR", "CHAR"])
+        canonical_types = set(ORACLE_TYPE_MAP.get(t, t) for t in ["VARCHAR", "CHAR", "CLOB"])
 
         for col in columns:
             col_type = col.data_type.upper().split("(")[0].split(" ")[0]
@@ -356,9 +356,9 @@ class ColumnRuleEngine:
     def _rule_wrong_number_as_text(
         self, columns: list[ColumnMetadata], schema: DatabaseSchema | None
     ) -> list[ClassificationResult]:
-        """Detect NUMBER columns stored as VARCHAR/CHAR."""
+        """Detect NUMBER columns stored as VARCHAR/CHAR/CLOB."""
         results: list[ClassificationResult] = []
-        canonical_numeric = set(ORACLE_TYPE_MAP.get(t, t) for t in ["VARCHAR", "CHAR"])
+        canonical_numeric = set(ORACLE_TYPE_MAP.get(t, t) for t in ["VARCHAR", "CHAR", "CLOB"])
 
         for col in columns:
             col_type = col.data_type.upper().split("(")[0].split(" ")[0]
@@ -391,9 +391,9 @@ class ColumnRuleEngine:
     def _rule_bad_boolean(
         self, columns: list[ColumnMetadata], schema: DatabaseSchema | None
     ) -> list[ClassificationResult]:
-        """Detect BOOLEAN stored as VARCHAR/CHAR."""
+        """Detect BOOLEAN stored as VARCHAR/CHAR/CLOB."""
         results: list[ClassificationResult] = []
-        text_types = set(ORACLE_TYPE_MAP.get(t, t) for t in ["VARCHAR", "CHAR"])
+        text_types = set(ORACLE_TYPE_MAP.get(t, t) for t in ["VARCHAR", "CHAR", "CLOB"])
 
         for col in columns:
             col_type = col.data_type.upper().split("(")[0].split(" ")[0]
@@ -579,7 +579,17 @@ class ColumnRuleEngine:
             table_name = self._table_for(col)
             if not table_name:
                 continue
-            if col.name.upper() in POLYMORPHIC_TYPE_NAMES:
+            is_poly = col.name.upper() in POLYMORPHIC_TYPE_NAMES
+            if not is_poly:
+                # _O_ pattern: NOMBRE_O_DESCRIPCION, CANT_O_PRECIO, etc.
+                # token 'O' surrounded by >=2-char neighbours (avoids PISO_O, O_X).
+                tokens = col.name.upper().replace("-", "_").split("_")
+                for i, tok in enumerate(tokens):
+                    if tok == "O" and 0 < i < len(tokens) - 1:
+                        if len(tokens[i - 1]) >= 2 and len(tokens[i + 1]) >= 2:
+                            is_poly = True
+                            break
+            if is_poly:
                 results.append(
                     ClassificationResult(
                         column_name=col.name,
@@ -1532,6 +1542,19 @@ def classify(
                     "date_as_text",
                     "number_as_text",
                 ):
+                    results.append(ClassificationResult(
+                        column_name=col.name,
+                        table_name=table.name,
+                        predicted_label=cl,
+                        confidence=0.85,
+                        severity=Severity.MEDIUM,
+                        method="rule_engine",
+                        explanation=f"Column '{col.name}' detected as {cl}.",
+                        fix="",
+                        needs_review=True,
+                    ))
+                    continue
+                if tl == "giant_table" and cl == "polymorphic":
                     results.append(ClassificationResult(
                         column_name=col.name,
                         table_name=table.name,

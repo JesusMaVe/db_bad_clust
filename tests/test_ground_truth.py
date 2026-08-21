@@ -49,6 +49,9 @@ class TestBuildGroundTruthMap:
             "impossible_data", "self_referencing", "polymorphic",
             "giant_table", "inconsistent_naming", "eav", LABEL_CLEAN,
             "bad_boolean", "number_as_text",
+            # raw rule label surviving on non-flagged tables with CLOB
+            # keyword columns (e.g. METADATA.FECHA_CREACION) — issue CLOB fix
+            "date_as_text",
         }
         assert values.issubset(valid_labels)
 

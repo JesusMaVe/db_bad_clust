@@ -1590,3 +1590,245 @@ class TestOracleReportLevelDetectors:
         results = ColumnRuleEngine().detect_oversized_varchars(cols, schema)
         assert len(results) == 1
         assert results[0].column_name == "FLAG_ACTIVO"
+
+
+# ─── Regression: polymorphic _O_ pattern (issue #7) ───────────────────
+
+
+class TestPolymorphicOPattern:
+    """_O_ multi-purpose columns must be detected as polymorphic."""
+
+    def test_detects_single_o_column(self, col_engine: ColumnRuleEngine) -> None:
+        schema = DatabaseSchema(
+            tables=[
+                TableMetadata(
+                    name="TODO_EN_UNO",
+                    columns=[
+                        ColumnMetadata(name="ID", data_type="NUMBER", nullable=False),
+                        ColumnMetadata(name="NOMBRE_O_DESCRIPCION", data_type="VARCHAR2", data_length=4000, nullable=True),
+                    ],
+                )
+            ]
+        )
+        results = col_engine.classify([], schema)
+        labels = {r.column_name: r.predicted_label for r in results}
+        assert labels.get("NOMBRE_O_DESCRIPCION") == "polymorphic"
+
+    def test_detects_all_four_todo_en_uno(self, col_engine: ColumnRuleEngine) -> None:
+        schema = DatabaseSchema(
+            tables=[
+                TableMetadata(
+                    name="TODO_EN_UNO",
+                    columns=[
+                        ColumnMetadata(name="ID", data_type="NUMBER", nullable=False),
+                        ColumnMetadata(name="NOMBRE_O_DESCRIPCION", data_type="VARCHAR2", nullable=True),
+                        ColumnMetadata(name="CANT_O_PRECIO", data_type="VARCHAR2", nullable=True),
+                        ColumnMetadata(name="FECHA_O_DIRECCION", data_type="VARCHAR2", nullable=True),
+                        ColumnMetadata(name="ESTADO_O_ACTIVO", data_type="VARCHAR2", nullable=True),
+                    ],
+                )
+            ]
+        )
+        results = col_engine.classify([], schema)
+        by_name = {r.column_name: r.predicted_label for r in results}
+        for col in ("NOMBRE_O_DESCRIPCION", "CANT_O_PRECIO", "FECHA_O_DIRECCION", "ESTADO_O_ACTIVO"):
+            assert by_name.get(col) == "polymorphic", f"{col} not detected"
+
+    def test_no_false_on_presupuesto(self, col_engine: ColumnRuleEngine) -> None:
+        schema = DatabaseSchema(
+            tables=[
+                TableMetadata(
+                    name="T",
+                    columns=[
+                        ColumnMetadata(name="PRESUPUESTO", data_type="VARCHAR2", nullable=True),
+                        ColumnMetadata(name="CODIGO", data_type="VARCHAR2", nullable=True),
+                        ColumnMetadata(name="PISO_O", data_type="VARCHAR2", nullable=True),
+                        ColumnMetadata(name="O_DESCRIPCION", data_type="VARCHAR2", nullable=True),
+                    ],
+                )
+            ]
+        )
+        results = col_engine.classify([], schema)
+        assert all(r.predicted_label != "polymorphic" for r in results)
+
+    def test_no_flag_without_schema(self, col_engine: ColumnRuleEngine) -> None:
+        cols = [ColumnMetadata(name="NOMBRE_O_DESCRIPCION", data_type="VARCHAR2", nullable=True)]
+        results = col_engine.classify(cols)
+        assert all(r.predicted_label != "polymorphic" for r in results)
+
+    def test_tipo_name_still_works(self, col_engine: ColumnRuleEngine) -> None:
+        schema = DatabaseSchema(
+            tables=[
+                TableMetadata(
+                    name="T",
+                    columns=[ColumnMetadata(name="TIPO_REGISTRO", data_type="VARCHAR2", nullable=True)],
+                )
+            ]
+        )
+        results = col_engine.classify([], schema)
+        assert any(r.predicted_label == "polymorphic" for r in results)
+
+
+class TestPolymorphicGiantMerge:
+    """Column-level polymorphic must beat table-level giant_table."""
+
+    @staticmethod
+    def _todo_en_uno_schema() -> DatabaseSchema:
+        cols = [ColumnMetadata(name=f"COL_{i}", data_type="VARCHAR2", nullable=True) for i in range(11)]
+        cols += [
+            ColumnMetadata(name="TIPO_REGISTRO", data_type="VARCHAR2", nullable=True),
+            ColumnMetadata(name="NOMBRE_O_DESCRIPCION", data_type="VARCHAR2", nullable=True),
+            ColumnMetadata(name="CANT_O_PRECIO", data_type="VARCHAR2", nullable=True),
+            ColumnMetadata(name="FECHA_O_DIRECCION", data_type="VARCHAR2", nullable=True),
+            ColumnMetadata(name="ESTADO_O_ACTIVO", data_type="VARCHAR2", nullable=True),
+        ]
+        # 16 cols -> giant_table
+        return DatabaseSchema(tables=[TableMetadata(name="TODO_EN_UNO", columns=cols)])
+
+    def test_o_columns_override_giant(self) -> None:
+        from rule_engine import classify as classify_schema
+
+        results = classify_schema(schema=self._todo_en_uno_schema())
+        by_col = {r.column_name: r.predicted_label for r in results}
+        for col in ("NOMBRE_O_DESCRIPCION", "CANT_O_PRECIO", "FECHA_O_DIRECCION", "ESTADO_O_ACTIVO", "TIPO_REGISTRO"):
+            assert by_col[col] == "polymorphic", f"{col} should be polymorphic, got {by_col[col]}"
+        # remaining 11 stay giant_table
+        giants = [c for c, lab in by_col.items() if lab == "giant_table"]
+        assert len(giants) == 11
+
+    def test_configuracion_eav_not_overridden(self) -> None:
+        from rule_engine import classify as classify_schema
+
+        schema = DatabaseSchema(
+            tables=[
+                TableMetadata(
+                    name="CONFIGURACION",
+                    columns=[
+                        ColumnMetadata(name="ID", data_type="NUMBER", nullable=True),
+                        ColumnMetadata(name="CLAVE", data_type="VARCHAR2", nullable=True),
+                        ColumnMetadata(name="VALOR", data_type="VARCHAR2", nullable=True),
+                        ColumnMetadata(name="TIPO_DATO", data_type="VARCHAR2", nullable=True),
+                    ],
+                )
+            ]
+        )
+        # TIPO_DATO is in POLYMORPHIC_TYPE_NAMES but table is eav -> must stay eav
+        results = classify_schema(schema=schema)
+        by_col = {r.column_name: r.predicted_label for r in results}
+        assert by_col["TIPO_DATO"] == "eav"
+
+    def test_double_detection_wins_polymorphic(self) -> None:
+        """FECHA_O_DIRECCION also fires date_as_text; polymorphic must win via merge."""
+        from rule_engine import classify as classify_schema
+
+        # 16 cols with giant_table, one is FECHA_O_DIRECCION (VARCHAR2 + date keyword)
+        cols = [ColumnMetadata(name=f"X{i}", data_type="VARCHAR2", nullable=True) for i in range(15)]
+        cols.append(ColumnMetadata(name="FECHA_O_DIRECCION", data_type="VARCHAR2", nullable=True))
+        schema = DatabaseSchema(tables=[TableMetadata(name="BIG", columns=cols)])
+        results = classify_schema(schema=schema)
+        by_col = {r.column_name: r.predicted_label for r in results}
+        assert by_col["FECHA_O_DIRECCION"] == "polymorphic"
+
+
+# ─── Regression: CLOB counts as text for type rules ───────────────────
+
+
+class TestClobTypeRules:
+    """CLOB columns with date/number/boolean keywords must be detected
+    (METADATA.FECHA_CREACION / METADATA.ES_ACTIVO were FNs). BLOB never."""
+
+    def test_clob_with_date_keyword(self, col_engine: ColumnRuleEngine) -> None:
+        schema = DatabaseSchema(
+            tables=[
+                TableMetadata(
+                    name="METADATA",
+                    columns=[ColumnMetadata(name="FECHA_CREACION", data_type="CLOB", nullable=True)],
+                )
+            ]
+        )
+        results = col_engine.classify(schema.tables[0].columns)
+        labels = {r.column_name: r.predicted_label for r in results}
+        assert labels.get("FECHA_CREACION") == "date_as_text"
+
+    def test_clob_with_boolean_keyword(self, col_engine: ColumnRuleEngine) -> None:
+        schema = DatabaseSchema(
+            tables=[
+                TableMetadata(
+                    name="METADATA",
+                    columns=[ColumnMetadata(name="ES_ACTIVO", data_type="CLOB", nullable=True)],
+                )
+            ]
+        )
+        results = col_engine.classify(schema.tables[0].columns)
+        labels = {r.column_name: r.predicted_label for r in results}
+        assert labels.get("ES_ACTIVO") == "bad_boolean"
+
+    def test_clob_with_number_keyword(self, col_engine: ColumnRuleEngine) -> None:
+        schema = DatabaseSchema(
+            tables=[
+                TableMetadata(
+                    name="T",
+                    columns=[ColumnMetadata(name="PRECIO", data_type="NCLOB", nullable=True)],
+                )
+            ]
+        )
+        results = col_engine.classify(schema.tables[0].columns)
+        labels = {r.column_name: r.predicted_label for r in results}
+        assert labels.get("PRECIO") == "number_as_text"
+
+    def test_plain_clob_not_flagged(self, col_engine: ColumnRuleEngine) -> None:
+        schema = DatabaseSchema(
+            tables=[
+                TableMetadata(
+                    name="T",
+                    columns=[
+                        ColumnMetadata(name="DESCRIPCION", data_type="CLOB", nullable=True),
+                        ColumnMetadata(name="NOTAS", data_type="CLOB", nullable=True),
+                        ColumnMetadata(name="OBSERVACIONES", data_type="CLOB", nullable=True),
+                    ],
+                )
+            ]
+        )
+        results = col_engine.classify(schema.tables[0].columns)
+        assert all(r.predicted_label != "date_as_text" for r in results)
+        assert all(r.predicted_label != "number_as_text" for r in results)
+        assert all(r.predicted_label != "bad_boolean" for r in results)
+
+    def test_blob_never_flagged(self, col_engine: ColumnRuleEngine) -> None:
+        schema = DatabaseSchema(
+            tables=[
+                TableMetadata(
+                    name="T",
+                    columns=[
+                        ColumnMetadata(name="DATOS_FECHA", data_type="BLOB", nullable=True),
+                        ColumnMetadata(name="PRECIO_BINARIO", data_type="BLOB", nullable=True),
+                    ],
+                )
+            ]
+        )
+        results = col_engine.classify(schema.tables[0].columns)
+        assert all(r.predicted_label != "date_as_text" for r in results)
+        assert all(r.predicted_label != "number_as_text" for r in results)
+
+    def test_real_metadata_columns_flip(self, col_engine: ColumnRuleEngine) -> None:
+        """Both real FN columns from the honest evaluation must be caught."""
+        schema = DatabaseSchema(
+            tables=[
+                TableMetadata(
+                    name="METADATA",
+                    columns=[
+                        ColumnMetadata(name="NOMBRE_CAMPO", data_type="CLOB", nullable=True),
+                        ColumnMetadata(name="VALOR_CAMPO", data_type="BLOB", nullable=True),
+                        ColumnMetadata(name="TIPO_DATO", data_type="CLOB", nullable=True),
+                        ColumnMetadata(name="ES_ACTIVO", data_type="CLOB", nullable=True),
+                        ColumnMetadata(name="FECHA_CREACION", data_type="CLOB", nullable=True),
+                    ],
+                )
+            ]
+        )
+        results = col_engine.classify(schema.tables[0].columns)
+        labels = {r.column_name: r.predicted_label for r in results}
+        assert labels.get("ES_ACTIVO") == "bad_boolean"
+        assert labels.get("FECHA_CREACION") == "date_as_text"
+        # the rest stay undetected
+        assert all(c not in labels for c in ("NOMBRE_CAMPO", "TIPO_DATO"))

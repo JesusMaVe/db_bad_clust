@@ -66,6 +66,7 @@ Notebooks 01+03+04 need Oracle up; 02 needs it only transitively (reads pickle).
 - **Keyword matching is token-boundary** (`_kw_match`) — substring matching caused false positives ('fec' matched inside 'afectada'). Never revert to `kw in name`.
 - **SchemaSpy detections are report-level** (`detect_missing_pk` / `detect_redundant_indexes` / `detect_implicit_fks` are NOT in the classify() rule chain) — adding them there would mask all other detections (all 23 tables lack PK) and pollute classification metrics.
 - **Column-level date/number_as_text beats table-level inconsistent_naming** in the merge (deliberate; issue #3).
+- **Column-level polymorphic beats table-level giant_table** in the merge (deliberate; issue #7: TODO_EN_UNO `_O_` columns) — eav/inconsistent_naming keep masking polymorphic (CONFIGURACION.TIPO_DATO stays eav by design).
 - **ColumnRuleEngine must be invoked per table** in `classify()` — a flat run collapses same-named columns (ACTIVO × 4) into one detection (issue #2).
 - Ground truth is structural per-table; semantic embeddings do NOT improve ARI (α=0 wins) — embeddings are for semantic redundancy, not anti-pattern classification.
 
@@ -74,8 +75,8 @@ Notebooks 01+03+04 need Oracle up; 02 needs it only transitively (reads pickle).
 - `SKIP_BERT = True` in notebook 02 → synthetic embeddings (avoids ~470MB MiniLM download). Current pickle was built with real embeddings.
 - Classification weights (notebooks): α=0.15, β=0.35, γ=0.45, δ=0.05
 - Best clustering (re-validated, issue #1): α=0.00, β=0.35, γ=0.45, δ=0.20 + PCA 20D + HDBSCAN → ARI 0.5815
-- Rule Engine (aligned GT, circular): accuracy 0.9877 / F1-macro 0.9057 (243 columns); `impossible_data` 0.00 because Oracle extraction loses `fk_references_column`
-- Rule Engine (manual GT, honest): accuracy 0.8642 / F1-macro 0.7745 — weakness = TODO_EN_UNO (giant_table en vez de polymorphic) + impossible_data no detectado + sobredetección de clean
+- Rule Engine (aligned GT, circular): accuracy 0.9877 / F1-macro 0.9057 (243 columns); `impossible_data` 0.00 — verified: the extractor is correct; the state `is_foreign_key and not fk_references_column` only exists in the synthetic benchmark (schema_generator sets FK without reference); real Oracle has zero R constraints and parent keys have duplicates/nulls so FKs cannot even be created (issue #6, documented limitation)
+- Rule Engine (manual GT, honest): accuracy 0.8930 / F1-macro 0.8467 — polymorphic 1.00/1.00 (issue #7 fix: `_O_` + giant_table→polymorphic merge exemption; FLAG_* stays inconsistent_naming by design) + self_contradictory 1.00/1.00 y wrong_data_types 0.96/0.96 (CLOB fix: rules 1-3 gate incluye CLOB; BLOB/LONG excluidos) + impossible_data 0.00 (documented limitation #6: verified — extractor correct, parent keys have duplicates/nulls so FKs cannot be created; REGISTRO_ID indetectable from metadata) + sobredetección de clean
 - One-Class SVM fallback disabled — worse than rules
 
 ## Gotchas
