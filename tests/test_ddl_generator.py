@@ -11,8 +11,12 @@ from pathlib import Path
 
 import pytest
 
-from ddl_generator import DDLGenerator, _guess_target_type, _quote_if_reserved
-from schema_extractor import ColumnMetadata, DatabaseSchema, TableMetadata
+from db_bad_clust.data.schema_extractor import ColumnMetadata, DatabaseSchema, TableMetadata
+from db_bad_clust.generation.ddl_generator import (
+    DDLGenerator,
+    _guess_target_type,
+    _quote_if_reserved,
+)
 
 
 @pytest.fixture
@@ -111,7 +115,7 @@ class TestCLI:
         with pickle_path.open("wb") as f:
             pickle.dump(sample_schema, f)
 
-        from ddl_generator import _load_schema_from_pickle
+        from db_bad_clust.generation.ddl_generator import _load_schema_from_pickle
 
         loaded = _load_schema_from_pickle(pickle_path)
         assert loaded.total_columns() == sample_schema.total_columns()

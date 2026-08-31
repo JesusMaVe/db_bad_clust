@@ -14,22 +14,21 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 
-from exceptions import (
-    BadDBError,
-    DatabaseError,
-    ConnectionError,
-    QueryError,
-    SchemaError,
-    EmbeddingError,
-    ClusteringError,
-    EvaluationError,
-    ConfigError,
-    GenerationError,
-    VisualizationError,
-)
-
 import pytest
 
+from db_bad_clust.exceptions import (
+    BadDBError,
+    ClusteringError,
+    ConfigError,
+    ConnectionError,
+    DatabaseError,
+    EmbeddingError,
+    EvaluationError,
+    GenerationError,
+    QueryError,
+    SchemaError,
+    VisualizationError,
+)
 
 # ── All exceptions can be instantiated ─────────────────────────────────
 

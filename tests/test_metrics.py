@@ -3,8 +3,8 @@ test_metrics.py — Tests for metrics.py module
 """
 
 import numpy as np
-import pytest
-from metrics import ClusteringMetrics
+
+from db_bad_clust.evaluation.metrics import ClusteringMetrics
 
 
 class TestSilhouette:

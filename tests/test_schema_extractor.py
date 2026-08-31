@@ -15,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import pytest
 
-from schema_extractor import SchemaExtractor
+from db_bad_clust.data.schema_extractor import SchemaExtractor
 
 
 class FakeCursor:

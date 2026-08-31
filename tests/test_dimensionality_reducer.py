@@ -16,11 +16,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 
-import pytest
 import numpy as np
-from dimensionality_reducer import DimensionalityReducer
-from exceptions import ClusteringError
+import pytest
 
+from db_bad_clust.clustering.dimensionality_reducer import DimensionalityReducer
+from db_bad_clust.exceptions import ClusteringError
 
 # ── Fixtures ────────────────────────────────────────────────────────────
 

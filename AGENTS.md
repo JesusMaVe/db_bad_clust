@@ -1,25 +1,29 @@
 # AGENTS.md — db_bad_clust (ml_bad_db_trainer)
 
-**Status: Phase 1 (COMPLETE) → Phase 2 (COMPLETE) → Phase 3 (COMPLETE) → Notebooks (CURRENT)**
+**Status: Phase 1 (COMPLETE) → Phase 2 (COMPLETE) → Phase 3 (COMPLETE) → Notebooks (COMPLETE) → Packaging (CURRENT)**
 
 ## Setup
 
 ```bash
-docker compose up -d          # Oracle 23c, healthcheck ~30s
-pip install -r requirements.txt
+docker compose up -d                         # Oracle 23c, healthcheck ~30s
+.venv/bin/python -m pip install -e ".[dev]"  # installs db_bad_clust + runtime/dev deps from pyproject
 ```
 
-Use `.venv/bin/python -m <cmd>` — venv shebangs are stale (folder was renamed), entrypoints like `jupyter`/`pip`/`nbconvert` fail.
+Use `.venv/bin/python -m <cmd>` — venv shebangs are stale (folder was renamed), entrypoints like
+`jupyter`/`pip`/`nbconvert` fail.
 
 ## Oracle DB — NOT fully reproducible from the repo
 
-- The 23 tables were created ad-hoc; there is no DDL generator in the repo (`scripts/` no longer exists).
-- `anti_patterns.py` is a **data-only catalog** (no `__main__`) — importing it gives the expected schema; running it does nothing.
-- The DB is expected to match the catalog. If they drift (e.g. a catalog table missing in Oracle), metrics silently change — this happened with DATOS_MAESTROS (issue #2).
+- The 23 tables were created ad-hoc; there is no DDL generator for the *real* DB in the repo
+  (`db_bad_clust.generation.ddl_generator` emits fix scripts for detections, not the original schema).
+- `db_bad_clust.generation.anti_patterns` is a **data-only catalog** (no `__main__`) — importing it
+  gives the expected schema; running it does nothing.
+- The DB is expected to match the catalog. If they drift (e.g. a catalog table missing in Oracle),
+  metrics silently change — this happened with DATOS_MAESTROS (issue #2).
 - The only runnable DB step is the documentation overlay:
 
 ```bash
-.venv/bin/python apply_comments.py   # applies TABLE_COMMENTS/COLUMN_COMMENTS to Oracle
+.venv/bin/python scripts/apply_comments.py   # applies TABLE_COMMENTS/COLUMN_COMMENTS to Oracle
 ```
 
 - It requires the Oracle container up (`docker compose up -d`, wait for healthy).
@@ -33,7 +37,10 @@ Run in order; each saves a pickle to `output/` for the next:
 3. `notebooks/03_classification.ipynb` — Rule Engine + evaluation vs ground truth
 4. `notebooks/04_analysis.ipynb` — metrics + recommendations + clustering ARI (writes `output/notebook_results/`)
 
-**Manual ground truth (optional)**: `label_export.py` dumps `output/manual_labels.csv` (empty `label` column) from Oracle; fill labels (vocabulary in `ground_truth.MANUAL_LABEL_VOCABULARY`) and notebook 03 auto-uses them instead of the rule-engine catalog, giving an honest, non-circular evaluation.
+**Manual ground truth (optional)**: `db_bad_clust.generation.label_export` dumps
+`output/manual_labels.csv` (empty `label` column) from Oracle; fill labels (vocabulary in
+`db_bad_clust.generation.ground_truth.MANUAL_LABEL_VOCABULARY`) and notebook 03 auto-uses them
+instead of the rule-engine catalog, giving an honest, non-circular evaluation.
 
 Headless (verified):
 
@@ -41,55 +48,99 @@ Headless (verified):
 .venv/bin/python -m nbconvert --to notebook --execute --inplace notebooks/01_data_preparation.ipynb
 ```
 
-Notebooks use `sys.path.insert(0, str(Path.cwd().parent))` — run from `notebooks/` in Jupyter, or any dir with nbconvert.
-Notebooks 01+03+04 need Oracle up; 02 needs it only transitively (reads pickle). Notebooks 01–02 re-run takes minutes with real BERT (`SKIP_BERT=False`); 03–04 are fast.
+Notebooks import the installed package (`from db_bad_clust.data.schema_extractor import ...`) —
+no `sys.path` hacks. Notebooks 01+03+04 need Oracle up; 02 needs it only transitively (reads
+pickle). Notebooks 01-02 re-run takes minutes with real BERT (`SKIP_BERT=False`); 03-04 are fast.
 
-## Modules (repo root, not scripts/)
+## Package layout
 
-- Data: `db_connector.py`, `schema_extractor.py` (bulk queries: one per dictionary view + redundant-index scan), `text_preprocessor.py`, `structural_encoder.py`, `bert_embedder.py` (MiniLM-L12, mean pooling, 384D), `feature_builder.py`
-- ML: `dimensionality_reducer.py`, `cluster_engine.py`
-- Evaluation: `evaluator.py` (facade) → `metrics.py`, `validation.py`, `anomaly.py`, `reporter.py`
-- Anti-patterns: `rule_engine.py`, `recommender.py`, `recommendation_reporter.py`, `ground_truth.py`, `anti_patterns.py` (catalog), `apply_comments.py`, `exceptions.py`
+```
+src/db_bad_clust/
+├── exceptions.py    BadDBError + subclasses shared across the package
+├── data/            db_connector, schema_extractor
+├── features/        text_preprocessor, structural_encoder, bert_embedder, feature_builder
+├── clustering/       dimensionality_reducer, cluster_engine
+├── rules/           rule_engine (detection + SQL_RESERVED_WORDS, _kw_match — the single home
+│                    for keyword logic), recommender, recommendation_reporter
+├── evaluation/       metrics (internal), validation (external, + cross_table_analysis /
+│                    cluster_composition salvaged from the deleted evaluator facade), anomaly
+└── generation/       anti_patterns (catalog), schema_generator, benchmark, ddl_generator,
+                     ground_truth (also owns RULE_TO_MANUAL + MANUAL_LABEL_VOCABULARY), label_export
+scripts/             apply_comments.py — one-shot DB script, not imported by anything
+```
+
+There is no `evaluator.py` / `reporter.py` facade anymore — they were pure pass-throughs
+(deletion test: deleting them removed a hop, concentrated nothing). Call `metrics.py`,
+`validation.py`, `anomaly.py` directly.
 
 ## Tests & lint
 
 ```bash
-.venv/bin/python -m pytest tests/ -v                 # 500 tests, NO DB required (mock-based)
+.venv/bin/python -m pytest tests/ -v                 # 460 tests, NO DB required (mock-based)
 .venv/bin/python -m pytest tests/test_rule_engine.py::TestSchemaSpySignals -q   # single test
-.venv/bin/python -m ruff check .                     # ~66 pre-existing errors (mostly old tests + rule_engine.py); new code should be lint-clean
+.venv/bin/python -m ruff check src tests scripts      # 11 pre-existing errors (RUF012 mutable
+                                                       # class defaults in rule_engine.py/anti_patterns.py); new code should be lint-clean
 ```
 
 ## Critical invariants (learned the hard way)
 
-- **Ground truth is rule-engine aligned** — `ground_truth.build_ground_truth_map()` and the generator manifest both run `rule_engine.classify()` on the schema, so detection and truth share label semantics. There is no duplicated keyword logic in `ground_truth.py` anymore (delegates to `rule_engine.py`); keep it that way.
-- **Keyword lists live only in `rule_engine.py`** (and mirror copies in `ddl_generator.py` / `schema_generator.py` for generation) — any change (keyword, exception, matcher) must be applied in all three or generation/metrics silently diverge.
-- **Keyword matching is token-boundary** (`_kw_match`) — substring matching caused false positives ('fec' matched inside 'afectada'). Never revert to `kw in name`.
-- **SchemaSpy detections are report-level** (`detect_missing_pk` / `detect_redundant_indexes` / `detect_implicit_fks` are NOT in the classify() rule chain) — adding them there would mask all other detections (all 23 tables lack PK) and pollute classification metrics.
-- **Column-level date/number_as_text beats table-level inconsistent_naming** in the merge (deliberate; issue #3).
-- **Column-level polymorphic beats table-level giant_table** in the merge (deliberate; issue #7: TODO_EN_UNO `_O_` columns) — eav/inconsistent_naming keep masking polymorphic (CONFIGURACION.TIPO_DATO stays eav by design).
-- **ColumnRuleEngine must be invoked per table** in `classify()` — a flat run collapses same-named columns (ACTIVO × 4) into one detection (issue #2).
-- Ground truth is structural per-table; semantic embeddings do NOT improve ARI (α=0 wins) — embeddings are for semantic redundancy, not anti-pattern classification.
+- **Ground truth is rule-engine aligned** — `ground_truth.build_ground_truth_map()` and the
+  generator manifest both run `rule_engine.classify()` on the schema, so detection and truth
+  share label semantics.
+- **Keyword lists live only in `rule_engine.py`** — `SQL_RESERVED_WORDS`, `_kw_match`,
+  `NUMBER_KEYWORDS`, `DATE_KEYWORDS_HIGH` are imported (not copied) by `ddl_generator.py` and
+  `schema_generator.py`. The old "mirror copies, keep in sync by hand" invariant is gone —
+  don't reintroduce a local copy in a generation module.
+- **Rule label → manual label mapping lives only in `ground_truth.RULE_TO_MANUAL`** —
+  `recommender.py` and `label_export.py` both import it instead of keeping their own map.
+  Same for the label vocabulary (`ground_truth.MANUAL_LABEL_VOCABULARY`).
+- **Keyword matching is token-boundary** (`_kw_match`) — substring matching caused false
+  positives ('fec' matched inside 'afectada'). Never revert to `kw in name`.
+- **SchemaSpy detections are report-level** (`detect_missing_pk` / `detect_redundant_indexes` /
+  `detect_implicit_fks` are NOT in the `classify()` rule chain) — adding them there would mask
+  all other detections (all 23 tables lack PK) and pollute classification metrics.
+- **Column-level date/number_as_text beats table-level inconsistent_naming** in the merge
+  (deliberate; issue #3).
+- **Column-level polymorphic beats table-level giant_table** in the merge (deliberate; issue #7:
+  TODO_EN_UNO `_O_` columns) — eav/inconsistent_naming keep masking polymorphic
+  (CONFIGURACION.TIPO_DATO stays eav by design).
+- **ColumnRuleEngine must be invoked per table** in `classify()` — a flat run collapses
+  same-named columns (ACTIVO × 4) into one detection (issue #2).
+- Ground truth is structural per-table; semantic embeddings do NOT improve ARI (α=0 wins) —
+  embeddings are for semantic redundancy, not anti-pattern classification.
+- **One-Class SVM fallback was removed** (was worse than rules, disabled, kept alive only by
+  its own tests) — don't resurrect it as a shortcut; fix the rule engine instead.
 
 ## Configuration
 
-- `SKIP_BERT = True` in notebook 02 → synthetic embeddings (avoids ~470MB MiniLM download). Current pickle was built with real embeddings.
+- `SKIP_BERT = True` in notebook 02 → synthetic embeddings (avoids ~470MB MiniLM download).
+  Current pickle was built with real embeddings.
 - Classification weights (notebooks): α=0.15, β=0.35, γ=0.45, δ=0.05
 - Best clustering (re-validated, issue #1): α=0.00, β=0.35, γ=0.45, δ=0.20 + PCA 20D + HDBSCAN → ARI 0.5815
-- Rule Engine (aligned GT, circular): accuracy 0.9877 / F1-macro 0.9057 (243 columns); `impossible_data` 0.00 — verified: the extractor is correct; the state `is_foreign_key and not fk_references_column` only exists in the synthetic benchmark (schema_generator sets FK without reference); real Oracle has zero R constraints and parent keys have duplicates/nulls so FKs cannot even be created (issue #6, documented limitation)
-- Rule Engine (manual GT, honest): accuracy 0.8930 / F1-macro 0.8467 — polymorphic 1.00/1.00 (issue #7 fix: `_O_` + giant_table→polymorphic merge exemption; FLAG_* stays inconsistent_naming by design) + self_contradictory 1.00/1.00 y wrong_data_types 0.96/0.96 (CLOB fix: rules 1-3 gate incluye CLOB; BLOB/LONG excluidos) + impossible_data 0.00 (documented limitation #6: verified — extractor correct, parent keys have duplicates/nulls so FKs cannot be created; REGISTRO_ID indetectable from metadata) + sobredetección de clean
-- One-Class SVM fallback disabled — worse than rules
+- Rule Engine (aligned GT, circular): accuracy 0.9877 / F1-macro 0.9057 (243 columns);
+  `impossible_data` 0.00 — verified: the extractor is correct; the state
+  `is_foreign_key and not fk_references_column` only exists in the synthetic benchmark
+  (schema_generator sets FK without reference); real Oracle has zero R constraints and parent
+  keys have duplicates/nulls so FKs cannot even be created (issue #6, documented limitation)
+- Rule Engine (manual GT, honest): accuracy 0.8930 / F1-macro 0.8467 — polymorphic 1.00/1.00
+  (issue #7 fix: `_O_` + giant_table→polymorphic merge exemption; FLAG_* stays
+  inconsistent_naming by design) + self_contradictory 1.00/1.00 y wrong_data_types 0.96/0.96
+  (CLOB fix: rules 1-3 gate incluye CLOB; BLOB/LONG excluidos) + impossible_data 0.00
+  (documented limitation #6: verified — extractor correct, parent keys have duplicates/nulls so
+  FKs cannot be created; REGISTRO_ID indetectable from metadata) + sobredetección de clean
 
 ## Gotchas
 
 - Table names case-sensitive in Oracle — always double-quote
 - Oracle allows only one LONG column per table (ORA-01754) — catalog uses CLOB/BLOB for the rest
-- Oracle rejects exact duplicate indexes (ORA-01408) — redundant-index anti-pattern is a composite index duplicating a single-column prefix; the two in the DB (EMPLEADOS, ORDENES_COMPRA) were created manually
+- Oracle rejects exact duplicate indexes (ORA-01408) — redundant-index anti-pattern is a
+  composite index duplicating a single-column prefix; the two in the DB (EMPLEADOS,
+  ORDENES_COMPRA) were created manually
 - `config.yaml` says `tables_count:10` but actual count is 23 — config value is unused
-- `tests/conftest.py` inserts a non-existent `scripts/` path — harmless, imports resolve from root
 
 ## Reference
 
-- `docs/implementation.md` — what was built + experimental results; §4-bis/§4-ter are the current post-improvement numbers
+- `docs/00_PROJECT_STATUS_REPORT.md` — full status report, phase by phase
 - `docs/research_extraction_preprocessing.md` — best-practices research with primary sources
-- `docs/phase3/02_final_report.md` — Phase 3 report (pre-revalidation numbers)
-- GitHub issues #1–#5 (closed) document each improvement with root-cause analysis
+- `docs/rule_engine_and_future_ml_report.md` — rule engine design + ML fallback exploration
+- GitHub issues #1-#7 (closed) document each improvement with root-cause analysis

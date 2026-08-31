@@ -16,14 +16,14 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import pytest
 
-from rule_engine import (
+from db_bad_clust.data.schema_extractor import ColumnMetadata, DatabaseSchema, TableMetadata
+from db_bad_clust.rules.rule_engine import (
     ClassificationResult,
     ColumnRuleEngine,
     RuleMatch,
     Severity,
     TableRuleEngine,
 )
-from schema_extractor import ColumnMetadata, DatabaseSchema, TableMetadata
 
 # ── Fixtures ────────────────────────────────────────────────────────────
 
@@ -1011,7 +1011,7 @@ class TestFullPipeline:
 
     def test_schema_to_recommendations(self) -> None:
         """Full pipeline: DatabaseSchema → ColumnRuleEngine → Recommender."""
-        from recommender import Recommender
+        from db_bad_clust.rules.recommender import Recommender
 
         schema = DatabaseSchema(
             tables=[
@@ -1067,7 +1067,7 @@ class TestFullPipeline:
 
     def test_schema_with_multiple_tables(self) -> None:
         """Pipeline handles multi-table schema correctly."""
-        from recommender import Recommender
+        from db_bad_clust.rules.recommender import Recommender
 
         schema = DatabaseSchema(
             tables=[
@@ -1361,7 +1361,7 @@ class TestDuplicateColumnNames:
 
     def test_classify_merge_no_collision(self) -> None:
         """Module-level classify() labels every duplicate column."""
-        from rule_engine import classify as classify_schema
+        from db_bad_clust.rules.rule_engine import classify as classify_schema
 
         results = classify_schema(schema=self._schema())
         assert len(results) == 3
@@ -1377,12 +1377,12 @@ class TestKeywordTokenMatching:
     """'fec' must not match inside 'afectada' (substring bug)."""
 
     def test_fec_not_matched_inside_afectada(self) -> None:
-        from rule_engine import DATE_KEYWORDS_HIGH, _kw_match
+        from db_bad_clust.rules.rule_engine import DATE_KEYWORDS_HIGH, _kw_match
 
         assert not any(_kw_match("tabla_afectada", kw) for kw in DATE_KEYWORDS_HIGH)
 
     def test_fec_matched_as_token_prefix(self) -> None:
-        from rule_engine import _kw_match
+        from db_bad_clust.rules.rule_engine import _kw_match
 
         assert _kw_match("fec_nacimiento", "fec")
         assert _kw_match("fecha_nacimiento", "fecha")
@@ -1411,7 +1411,7 @@ class TestWrongTypeOverridesNaming:
         return DatabaseSchema(tables=[TableMetadata(name="ORDENES_COMPRA", columns=cols)])
 
     def test_mistyped_columns_not_masked_by_naming(self) -> None:
-        from rule_engine import classify as classify_schema
+        from db_bad_clust.rules.rule_engine import classify as classify_schema
 
         results = classify_schema(schema=self._schema())
         by_col = {r.column_name: r.predicted_label for r in results}
@@ -1686,7 +1686,7 @@ class TestPolymorphicGiantMerge:
         return DatabaseSchema(tables=[TableMetadata(name="TODO_EN_UNO", columns=cols)])
 
     def test_o_columns_override_giant(self) -> None:
-        from rule_engine import classify as classify_schema
+        from db_bad_clust.rules.rule_engine import classify as classify_schema
 
         results = classify_schema(schema=self._todo_en_uno_schema())
         by_col = {r.column_name: r.predicted_label for r in results}
@@ -1697,7 +1697,7 @@ class TestPolymorphicGiantMerge:
         assert len(giants) == 11
 
     def test_configuracion_eav_not_overridden(self) -> None:
-        from rule_engine import classify as classify_schema
+        from db_bad_clust.rules.rule_engine import classify as classify_schema
 
         schema = DatabaseSchema(
             tables=[
@@ -1719,7 +1719,7 @@ class TestPolymorphicGiantMerge:
 
     def test_double_detection_wins_polymorphic(self) -> None:
         """FECHA_O_DIRECCION also fires date_as_text; polymorphic must win via merge."""
-        from rule_engine import classify as classify_schema
+        from db_bad_clust.rules.rule_engine import classify as classify_schema
 
         # 16 cols with giant_table, one is FECHA_O_DIRECCION (VARCHAR2 + date keyword)
         cols = [ColumnMetadata(name=f"X{i}", data_type="VARCHAR2", nullable=True) for i in range(15)]

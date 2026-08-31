@@ -18,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 
 import pytest
 
-from text_preprocessor import TextPreprocessor, preprocess
+from db_bad_clust.features.text_preprocessor import TextPreprocessor, preprocess
 
 # ── Fixture ─────────────────────────────────────────────────────────────
 

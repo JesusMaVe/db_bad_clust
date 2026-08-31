@@ -1,18 +1,11 @@
 """
-conftest.py — Shared pytest fixtures for the Phase 2 ML pipeline tests.
-
-All fixtures import from the scripts/ directory via sys.path.
+conftest.py — Shared pytest fixtures (schema/column fixtures for rule engine + clustering).
 """
 
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
-
-import pytest
 import numpy as np
-from schema_extractor import ColumnMetadata, TableMetadata, DatabaseSchema
+import pytest
 
+from db_bad_clust.data.schema_extractor import ColumnMetadata, DatabaseSchema, TableMetadata
 
 # ── Column-level fixtures ──────────────────────────────────────────────
 
@@ -239,7 +232,7 @@ def sample_reduced_data():
 @pytest.fixture
 def sample_type_encoding(sample_columns):
     """One-hot type encoding for sample_columns (5 x 12)."""
-    from structural_encoder import StructuralEncoder
+    from db_bad_clust.features.structural_encoder import StructuralEncoder
 
     encoder = StructuralEncoder()
     return encoder.encode_data_types(sample_columns)
@@ -248,7 +241,7 @@ def sample_type_encoding(sample_columns):
 @pytest.fixture
 def sample_constraint_encoding(sample_columns):
     """Binary constraint encoding for sample_columns (5 x 5)."""
-    from structural_encoder import StructuralEncoder
+    from db_bad_clust.features.structural_encoder import StructuralEncoder
 
     encoder = StructuralEncoder()
     return encoder.encode_constraints(sample_columns)
@@ -257,7 +250,7 @@ def sample_constraint_encoding(sample_columns):
 @pytest.fixture
 def sample_statistical_encoding(sample_columns):
     """Statistical features for sample_columns (5 x 1)."""
-    from structural_encoder import StructuralEncoder
+    from db_bad_clust.features.structural_encoder import StructuralEncoder
 
     encoder = StructuralEncoder()
     return encoder.encode_statistical(sample_columns)

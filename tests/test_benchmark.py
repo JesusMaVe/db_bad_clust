@@ -6,8 +6,8 @@ All tests are mock-based and do not require a running Oracle database.
 
 from __future__ import annotations
 
-from benchmark import run_benchmark
-from schema_generator import SchemaGeneratorConfig, SyntheticSchemaGenerator
+from db_bad_clust.generation.benchmark import run_benchmark
+from db_bad_clust.generation.schema_generator import SchemaGeneratorConfig, SyntheticSchemaGenerator
 
 
 class TestBenchmark:
@@ -27,7 +27,7 @@ class TestBenchmark:
             SchemaGeneratorConfig(num_tables=10, seed=7, anti_pattern_density=0.0)
         )
         # Force at least one FK-without-index table by injecting a template.
-        from schema_generator import _fk_without_index_table
+        from db_bad_clust.generation.schema_generator import _fk_without_index_table
 
         extra = _fk_without_index_table(generator.rng, 999)
         tables.append(extra)
@@ -45,7 +45,11 @@ class TestBenchmark:
         )
         schema = SyntheticSchemaGenerator.to_database_schema(tables)
 
-        from benchmark import _build_ground_truth, _collect_detections, _evaluate_report_level
+        from db_bad_clust.generation.benchmark import (
+            _build_ground_truth,
+            _collect_detections,
+            _evaluate_report_level,
+        )
 
         detections = _collect_detections(schema)
         _, table_truth, _ = _build_ground_truth(tables, manifest)

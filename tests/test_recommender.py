@@ -17,8 +17,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import pytest
 
-from recommender import Recommender
-from schema_extractor import ColumnMetadata, DatabaseSchema, TableMetadata
+from db_bad_clust.data.schema_extractor import ColumnMetadata, DatabaseSchema, TableMetadata
+from db_bad_clust.rules.recommender import Recommender
 
 # ── Fixtures ────────────────────────────────────────────────────────────
 

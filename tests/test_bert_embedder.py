@@ -19,7 +19,7 @@ import numpy as np
 import pytest
 import torch
 
-from bert_embedder import BERTEmbedder
+from db_bad_clust.features.bert_embedder import BERTEmbedder
 
 
 class MockModel:

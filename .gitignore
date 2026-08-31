@@ -27,8 +27,14 @@ output/notebook_results/
 .ipynb_checkpoints/
 Untitled.ipynb
 
-# Planning docs (local only)
-docs/*
+# Output (generated artifacts)
+output/*.json
+output/*.sql
+output/generated/
+!output/manual_labels.csv
+
+# Planning docs (local only) — reports under docs/ are tracked
+docs/superpowers/
 
 # IDE
 .idea/

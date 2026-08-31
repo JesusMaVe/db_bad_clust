@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import pytest
 
-from schema_generator import (
+from db_bad_clust.generation.schema_generator import (
     SchemaGeneratorConfig,
     SyntheticSchemaGenerator,
     _parse_fk_reference,

@@ -16,8 +16,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from anti_patterns import generate_poorly_designed_tables
-from ground_truth import (
+from db_bad_clust.generation.anti_patterns import generate_poorly_designed_tables
+from db_bad_clust.generation.ground_truth import (
     LABEL_CLEAN,
     build_ground_truth_map,
     get_ground_truth,

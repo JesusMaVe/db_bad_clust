@@ -1,0 +1,782 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Motor de Reglas Determinista — db_bad_clust</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+            background: #fafafa;
+            color: #1a1a1a;
+            line-height: 1.6;
+        }
+
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 60px 24px;
+        }
+
+        h1 {
+            font-size: 2rem;
+            font-weight: 700;
+            margin-bottom: 8px;
+            letter-spacing: -0.02em;
+        }
+
+        .subtitle {
+            color: #666;
+            font-size: 0.95rem;
+            margin-bottom: 40px;
+        }
+
+        h2 {
+            font-size: 1.4rem;
+            font-weight: 600;
+            margin: 48px 0 16px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid #e5e5e5;
+        }
+
+        h3 {
+            font-size: 1.1rem;
+            font-weight: 600;
+            margin: 32px 0 12px;
+        }
+
+        p {
+            margin-bottom: 16px;
+            color: #333;
+        }
+
+        strong { color: #111; }
+
+        /* Key metrics strip */
+        .metrics {
+            display: flex;
+            gap: 32px;
+            padding: 20px 0;
+            border-top: 1px solid #e5e5e5;
+            border-bottom: 1px solid #e5e5e5;
+            margin-bottom: 40px;
+        }
+
+        .metric {
+            text-align: center;
+        }
+
+        .metric-value {
+            font-size: 1.8rem;
+            font-weight: 700;
+            font-variant-numeric: tabular-nums;
+        }
+
+        .metric-label {
+            font-size: 0.75rem;
+            color: #888;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        /* Code blocks */
+        pre {
+            background: #f4f4f4;
+            border: 1px solid #e5e5e5;
+            border-radius: 6px;
+            padding: 16px;
+            overflow-x: auto;
+            font-family: 'SF Mono', 'Menlo', monospace;
+            font-size: 0.85rem;
+            line-height: 1.5;
+            margin: 16px 0;
+        }
+
+        code {
+            font-family: 'SF Mono', 'Menlo', monospace;
+            font-size: 0.88em;
+            background: #f0f0f0;
+            padding: 2px 6px;
+            border-radius: 4px;
+        }
+
+        pre code {
+            background: none;
+            padding: 0;
+        }
+
+        /* Tables */
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 16px 0;
+            font-size: 0.9rem;
+        }
+
+        th, td {
+            padding: 10px 12px;
+            text-align: left;
+            border-bottom: 1px solid #e5e5e5;
+        }
+
+        th {
+            font-weight: 600;
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            letter-spacing: 0.03em;
+            color: #666;
+        }
+
+        td { color: #333; }
+
+        tr:last-child td { border-bottom: none; }
+
+        /* Lists */
+        ul, ol {
+            padding-left: 20px;
+            margin: 12px 0;
+        }
+
+        li {
+            margin-bottom: 6px;
+            color: #333;
+        }
+
+        /* Rule blocks */
+        .rule {
+            background: #fff;
+            border: 1px solid #e5e5e5;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 16px 0;
+        }
+
+        .rule-header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 12px;
+        }
+
+        .rule-name {
+            font-family: 'SF Mono', 'Menlo', monospace;
+            font-size: 0.95rem;
+            font-weight: 600;
+        }
+
+        .rule-confidence {
+            font-size: 0.75rem;
+            color: #666;
+            background: #f4f4f4;
+            padding: 2px 8px;
+            border-radius: 4px;
+        }
+
+        .keywords {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            margin: 8px 0;
+        }
+
+        .keyword {
+            font-family: 'SF Mono', 'Menlo', monospace;
+            font-size: 0.8rem;
+            background: #f4f4f4;
+            padding: 3px 8px;
+            border-radius: 4px;
+            color: #555;
+        }
+
+        /* Flow steps */
+        .flow {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+            margin: 16px 0;
+        }
+
+        .flow-step {
+            background: #fff;
+            border: 1px solid #e5e5e5;
+            padding: 8px 14px;
+            border-radius: 6px;
+            font-size: 0.85rem;
+        }
+
+        .flow-step.active {
+            border-color: #333;
+            font-weight: 600;
+        }
+
+        .flow-arrow {
+            color: #ccc;
+            font-size: 0.9rem;
+        }
+
+        /* Timeline */
+        .timeline {
+            border-left: 2px solid #e5e5e5;
+            margin: 24px 0 24px 8px;
+            padding-left: 24px;
+        }
+
+        .timeline-item {
+            position: relative;
+            margin-bottom: 32px;
+        }
+
+        .timeline-item::before {
+            content: '';
+            position: absolute;
+            left: -30px;
+            top: 6px;
+            width: 10px;
+            height: 10px;
+            background: #333;
+            border-radius: 50%;
+        }
+
+        .timeline-item.phase-2::before { background: #666; }
+        .timeline-item.phase-3::before { background: #999; }
+
+        .timeline-title {
+            font-weight: 600;
+            margin-bottom: 4px;
+        }
+
+        .timeline-duration {
+            font-size: 0.8rem;
+            color: #888;
+            margin-bottom: 8px;
+        }
+
+        /* Comparison */
+        .compare {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 16px;
+            margin: 16px 0;
+        }
+
+        .compare-box {
+            padding: 16px;
+            border: 1px solid #e5e5e5;
+            border-radius: 8px;
+            background: #fff;
+        }
+
+        .compare-box h4 {
+            font-size: 0.85rem;
+            font-weight: 600;
+            margin-bottom: 8px;
+            color: #666;
+            text-transform: uppercase;
+            letter-spacing: 0.03em;
+        }
+
+        /* Blockquote */
+        blockquote {
+            border-left: 3px solid #ccc;
+            padding-left: 16px;
+            margin: 16px 0;
+            color: #555;
+        }
+
+        /* Decision table */
+        .decision-table td:first-child {
+            font-weight: 500;
+        }
+
+        /* Footer */
+        .footer {
+            margin-top: 60px;
+            padding-top: 20px;
+            border-top: 1px solid #e5e5e5;
+            font-size: 0.8rem;
+            color: #999;
+        }
+
+        /* Nav */
+        .toc {
+            margin-bottom: 40px;
+        }
+
+        .toc-title {
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: #999;
+            margin-bottom: 12px;
+        }
+
+        .toc-list {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px 16px;
+            list-style: none;
+            padding: 0;
+        }
+
+        .toc-list a {
+            font-size: 0.85rem;
+            color: #666;
+            text-decoration: none;
+        }
+
+        .toc-list a:hover {
+            color: #111;
+        }
+
+        @media (max-width: 600px) {
+            .metrics { flex-direction: column; gap: 16px; }
+            .compare { grid-template-columns: 1fr; }
+            .flow { flex-direction: column; align-items: flex-start; }
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+
+    <h1>Motor de Reglas Determinista y Roadmap ML</h1>
+    <p class="subtitle">db_bad_clust — 27 de Agosto, 2026</p>
+
+    <div class="metrics">
+        <div class="metric">
+            <div class="metric-value">89.3%</div>
+            <div class="metric-label">Accuracy</div>
+        </div>
+        <div class="metric">
+            <div class="metric-value">84.7%</div>
+            <div class="metric-label">F1-macro</div>
+        </div>
+        <div class="metric">
+            <div class="metric-value">243</div>
+            <div class="metric-label">Columnas</div>
+        </div>
+        <div class="metric">
+            <div class="metric-value">73.3%</div>
+            <div class="metric-label">Cobertura</div>
+        </div>
+    </div>
+
+    <nav class="toc">
+        <div class="toc-title">Contenido</div>
+        <ol class="toc-list">
+            <li><a href="#resumen">Resumen Ejecutivo</a></li>
+            <li><a href="#arquitectura">Arquitectura</a></li>
+            <li><a href="#reglas-columna">Reglas de Columna</a></li>
+            <li><a href="#reglas-tabla">Reglas de Tabla</a></li>
+            <li><a href="#merge">Merge y Prioridades</a></li>
+            <li><a href="#evaluacion">Evaluacion</a></li>
+            <li><a href="#sbert">SBERT</a></li>
+            <li><a href="#gnn">GNN</a></li>
+            <li><a href="#roadmap">Roadmap</a></li>
+            <li><a href="#decisiones">Decisiones</a></li>
+        </ol>
+    </nav>
+
+    <!-- 1 -->
+    <h2 id="resumen">1. Resumen Ejecutivo</h2>
+    <p>El sistema actual es un <strong>motor de reglas determinista</strong> que detecta 10 categorias de anti-patrones en esquemas Oracle. No usa ML para la clasificacion final: los embeddings BERT se calculan pero no se consumen, y Random Forest / One-Class SVM fueron descartados.</p>
+    <p>El motor alcanza <strong>accuracy 89.3%</strong> y <strong>F1-macro 84.7%</strong> contra ground truth manual, usando exclusivamente metadata de Oracle: tipos de dato, constraints, nombres de columnas.</p>
+
+    <div class="compare">
+        <div class="compare-box">
+            <h4>Actual</h4>
+            <ul>
+                <li>Rule engine determinista (Python puro)</li>
+                <li>SBERT calculado pero no consumido</li>
+                <li>ML descartado (RF: F1=0.17, SVM: 83% FP)</li>
+            </ul>
+        </div>
+        <div class="compare-box">
+            <h4>Futuro</h4>
+            <ul>
+                <li>SBERT como feature del rule engine</li>
+                <li>GNN como clasificador paralelo</li>
+                <li>Ensemble: rule engine + GNN + SBERT</li>
+            </ul>
+        </div>
+    </div>
+
+    <!-- 2 -->
+    <h2 id="arquitectura">2. Arquitectura</h2>
+    <p><code>rule_engine.py</code> (1611 lineas) contiene tres componentes:</p>
+    <ul>
+        <li><strong>ColumnRuleEngine</strong> — 8 reglas de columna + 4 report-level</li>
+        <li><strong>TableRuleEngine</strong> — 4 reglas de tabla + 6 report-level</li>
+        <li><strong>classify()</strong> — Funcion unificada de merge</li>
+    </ul>
+
+    <h3>Flujo de datos</h3>
+    <div class="flow">
+        <span class="flow-step">Oracle 23c</span>
+        <span class="flow-arrow">&rarr;</span>
+        <span class="flow-step">SchemaExtractor</span>
+        <span class="flow-arrow">&rarr;</span>
+        <span class="flow-step">DatabaseSchema</span>
+        <span class="flow-arrow">&rarr;</span>
+        <span class="flow-step active">Rule Engine</span>
+        <span class="flow-arrow">&rarr;</span>
+        <span class="flow-step">243 Resultados</span>
+    </div>
+
+    <h3>Entrada del motor</h3>
+    <table>
+        <thead>
+            <tr><th>Campo</th><th>Tipo</th><th>Descripcion</th></tr>
+        </thead>
+        <tbody>
+            <tr><td><code>table.name</code></td><td>str</td><td>Nombre de la tabla Oracle</td></tr>
+            <tr><td><code>col.name</code></td><td>str</td><td>Nombre de la columna</td></tr>
+            <tr><td><code>col.data_type</code></td><td>str</td><td>VARCHAR2, NUMBER, DATE, etc.</td></tr>
+            <tr><td><code>col.nullable</code></td><td>bool</td><td>Y o N</td></tr>
+            <tr><td><code>col.is_primary_key</code></td><td>bool</td><td>Pertenece a PK</td></tr>
+            <tr><td><code>col.is_foreign_key</code></td><td>bool</td><td>Es FK</td></tr>
+            <tr><td><code>col.data_length</code></td><td>int</td><td>Tamanio en bytes</td></tr>
+            <tr><td><code>col.avg_length</code></td><td>int</td><td>Tamanio promedio real</td></tr>
+        </tbody>
+    </table>
+    <p>El motor NO recibe embeddings BERT, vector phi, ni features estructurales. Trabaja con metadata pura de Oracle.</p>
+
+    <!-- 3 -->
+    <h2 id="reglas-columna">3. Reglas de Columna (8 activas)</h2>
+
+    <div class="rule">
+        <div class="rule-header">
+            <span class="rule-name">wrong_date_as_text</span>
+            <span class="rule-confidence">confianza: 0.90</span>
+        </div>
+        <p>Columna con nombre sugiriendo fecha pero tipo VARCHAR2 o CHAR.</p>
+        <div class="keywords">
+            <span class="keyword">fecha</span>
+            <span class="keyword">date</span>
+            <span class="keyword">time</span>
+            <span class="keyword">created</span>
+            <span class="keyword">updated</span>
+            <span class="keyword">nacimiento</span>
+            <span class="keyword">alta</span>
+            <span class="keyword">baja</span>
+        </div>
+        <p>Ejemplo: <code>CLIENTES_DIRECCIONES.FECHA_REGISTRO</code> es VARCHAR2 &rarr; detectado.</p>
+    </div>
+
+    <div class="rule">
+        <div class="rule-header">
+            <span class="rule-name">wrong_number_as_text</span>
+            <span class="rule-confidence">confianza: 0.85</span>
+        </div>
+        <p>Columna con nombre sugiriendo numero pero tipo VARCHAR2 o CHAR.</p>
+        <div class="keywords">
+            <span class="keyword">precio</span>
+            <span class="keyword">costo</span>
+            <span class="keyword">salario</span>
+            <span class="keyword">monto</span>
+            <span class="keyword">total</span>
+            <span class="keyword">amount</span>
+            <span class="keyword">balance</span>
+            <span class="keyword">saldo</span>
+        </div>
+    </div>
+
+    <div class="rule">
+        <div class="rule-header">
+            <span class="rule-name">self_contradictory</span>
+            <span class="rule-confidence">confianza: 0.80</span>
+        </div>
+        <p>Columna booleana almacenada como VARCHAR2 o CHAR.</p>
+        <div class="keywords">
+            <span class="keyword">flag</span>
+            <span class="keyword">active</span>
+            <span class="keyword">activo</span>
+            <span class="keyword">enabled</span>
+            <span class="keyword">is_active</span>
+            <span class="keyword">es_activo</span>
+        </div>
+        <p>Patrones de prefijo: <code>es_*</code>, <code>is_*</code>, <code>has_*</code>, <code>tiene_*</code>, <code>puede_*</code></p>
+    </div>
+
+    <div class="rule">
+        <div class="rule-header">
+            <span class="rule-name">reserved_words</span>
+            <span class="rule-confidence">confianza: 0.95</span>
+        </div>
+        <p>Nombre de columna es exactamente una palabra reservada SQL (91 palabras). Match exacto, case-sensitive.</p>
+    </div>
+
+    <div class="rule">
+        <div class="rule-header">
+            <span class="rule-name">self_referencing</span>
+            <span class="rule-confidence">confianza: 0.95 / 0.70</span>
+        </div>
+        <p>FK que referencia la misma tabla. Nombres tipicos: <code>parent_id</code>, <code>manager_id</code>, <code>ref_*</code></p>
+    </div>
+
+    <div class="rule">
+        <div class="rule-header">
+            <span class="rule-name">impossible_data</span>
+            <span class="rule-confidence">confianza: 0.95</span>
+        </div>
+        <p>Columna en PK que permite NULL, o FK que referencia columna inexistente. Solo existe en benchmark sintetico.</p>
+    </div>
+
+    <div class="rule">
+        <div class="rule-header">
+            <span class="rule-name">polymorphic</span>
+            <span class="rule-confidence">confianza: 0.75</span>
+        </div>
+        <p>Columna con nombre de discriminador de tipo o patron <code>_O_</code>. Nombres: <code>type</code>, <code>tipo</code>, <code>discriminador</code>, <code>class</code></p>
+    </div>
+
+    <div class="rule">
+        <div class="rule-header">
+            <span class="rule-name">wrong_data_types</span>
+            <span class="rule-confidence">confianza: 0.85</span>
+        </div>
+        <p>Tabla con &gt;20% de columnas VARCHAR2 con keywords de fecha/numero. Trigger: columnas detectadas como number_as_text o date_as_text.</p>
+    </div>
+
+    <h3>Reglas report-level (no participan en classify)</h3>
+    <table>
+        <thead>
+            <tr><th>Regla</th><th>Detecta</th><th>Por que no clasifica</th></tr>
+        </thead>
+        <tbody>
+            <tr><td><code>detect_missing_pk</code></td><td>Tablas sin PK</td><td>Enmascararia todas las detecciones</td></tr>
+            <tr><td><code>detect_redundant_indexes</code></td><td>Indices redundantes</td><td>Nivel de indice, no columna</td></tr>
+            <tr><td><code>detect_implicit_fks</code></td><td>FKs implicitas</td><td>Nivel de relacion, no columna</td></tr>
+            <tr><td><code>detect_obsolete_types</code></td><td>LONG / LONG RAW</td><td>Tipos obsoletos, no diseno</td></tr>
+            <tr><td><code>detect_oversized_varchars</code></td><td>VARCHAR2 sobre-declarados</td><td>Requiere datos reales</td></tr>
+        </tbody>
+    </table>
+
+    <!-- 4 -->
+    <h2 id="reglas-tabla">4. Reglas de Tabla (4 activas)</h2>
+
+    <div class="rule">
+        <div class="rule-header">
+            <span class="rule-name">giant_table</span>
+            <span class="rule-confidence">umbral: 15 columnas</span>
+        </div>
+        <p>Todas las columnas heredan el label. Excepcion: columnas polymorphic preservan su label.</p>
+    </div>
+
+    <div class="rule">
+        <div class="rule-header">
+            <span class="rule-name">eav_pattern</span>
+        </div>
+        <p>Tabla con <code>entity_id</code> + columna tipo attribute + columna tipo value.</p>
+    </div>
+
+    <div class="rule">
+        <div class="rule-header">
+            <span class="rule-name">inconsistent_naming</span>
+        </div>
+        <p>Mezcla espanol/ingles o predominio de genericos: <code>id</code>, <code>name</code>, <code>value</code>, <code>description</code>, <code>code</code></p>
+    </div>
+
+    <div class="rule">
+        <div class="rule-header">
+            <span class="rule-name">wrong_data_types</span>
+        </div>
+        <p>Tabla donde &gt;20% de columnas VARCHAR2 tienen keywords de fecha/numero.</p>
+    </div>
+
+    <!-- 5 -->
+    <h2 id="merge">5. Merge y Prioridades</h2>
+    <p>La funcion <code>classify()</code> (linea 1473) resuelve conflictos con esta cadena:</p>
+
+    <pre><code>Para cada columna:
+  1. Hay label de tabla?
+     SI &rarr; inconsistent_naming + date_as_text?  &rarr; usar columna
+            giant_table + polymorphic?            &rarr; usar polymorphic
+            otro caso                             &rarr; propagar tabla
+     NO &rarr; hay label de columna?  &rarr; usar columna
+            no hay nada            &rarr; clean</code></pre>
+
+    <h3>Prioridades de merge</h3>
+    <table>
+        <thead>
+            <tr><th>#</th><th>Columna</th><th>Tabla</th><th>Gana</th></tr>
+        </thead>
+        <tbody>
+            <tr><td>1</td><td><code>polymorphic</code></td><td><code>giant_table</code></td><td>polymorphic</td></tr>
+            <tr><td>2</td><td><code>date_as_text</code></td><td><code>inconsistent_naming</code></td><td>date_as_text</td></tr>
+            <tr><td>3</td><td><code>number_as_text</code></td><td><code>inconsistent_naming</code></td><td>number_as_text</td></tr>
+            <tr><td>4</td><td>otro</td><td>otro</td><td>label de tabla</td></tr>
+        </tbody>
+    </table>
+
+    <!-- 6 -->
+    <h2 id="evaluacion">6. Evaluacion</h2>
+    <p>Ground truth manual (243 columnas, evaluacion honesta, no circular):</p>
+
+    <table>
+        <thead>
+            <tr><th>Clase</th><th>Precision</th><th>Recall</th><th>F1</th><th>Soporte</th></tr>
+        </thead>
+        <tbody>
+            <tr><td>clean</td><td>0.94</td><td>0.78</td><td>0.85</td><td>78</td></tr>
+            <tr><td>eav</td><td>1.00</td><td>1.00</td><td>1.00</td><td>6</td></tr>
+            <tr><td>giant_table</td><td>0.89</td><td>1.00</td><td>0.94</td><td>90</td></tr>
+            <tr><td>impossible_data</td><td>0.00</td><td>0.00</td><td>0.00</td><td>4</td></tr>
+            <tr><td>inconsistent_naming</td><td>0.63</td><td>0.81</td><td>0.71</td><td>21</td></tr>
+            <tr><td>polymorphic</td><td>1.00</td><td>1.00</td><td>1.00</td><td>7</td></tr>
+            <tr><td>reserved_words</td><td>1.00</td><td>1.00</td><td>1.00</td><td>4</td></tr>
+            <tr><td>self_contradictory</td><td>1.00</td><td>1.00</td><td>1.00</td><td>5</td></tr>
+            <tr><td>self_referencing</td><td>1.00</td><td>1.00</td><td>1.00</td><td>1</td></tr>
+            <tr><td>wrong_data_types</td><td>0.96</td><td>0.96</td><td>0.96</td><td>27</td></tr>
+        </tbody>
+    </table>
+
+    <p><strong>Por que funciona:</strong></p>
+    <ol>
+        <li>Los anti-patrones son <strong>estructurales</strong>, no semanticos. Un VARCHAR2 que deberia ser DATE se detecta por tipo + keyword.</li>
+        <li>La metadata de Oracle es <strong>suficiente</strong>. PK, FK, Unique, data_length dan toda la senal.</li>
+        <li>Las reglas son <strong>interpretables</strong>. Cada deteccion genera explanation + fix.</li>
+        <li>Determinismo = <strong>reproducibilidad</strong>. Sin varianza de modelo.</li>
+    </ol>
+
+    <!-- 7 -->
+    <h2 id="sbert">7. SBERT — Estado Actual</h2>
+    <p><code>bert_embedder.py</code> (220 lineas) ya usa un modelo sentence-transformers:</p>
+    <pre><code>model_name = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"</code></pre>
+    <p>Hace mean pooling manual con attention mask y L2 normalization. Funciona, pero <strong>no se consume</strong>: el notebook 03 carga el pickle de embeddings y solo usa <code>schema</code>, ignorando <code>phi</code>.</p>
+
+    <h3>Opciones de mejora</h3>
+    <div class="compare">
+        <div class="compare-box">
+            <h4>Opcion A: Breaking Tie</h4>
+            <p>Cuando confidence &lt; 0.85, usar similitud coseno con embeddings de columnas conocidas para reforzar la clasificacion.</p>
+        </div>
+        <div class="compare-box">
+            <h4>Opcion B: Fallback</h4>
+            <p>KNN o SVM lineal sobre embeddings para las 60 columnas marcadas como clean con posibles anti-patrones sutiles.</p>
+        </div>
+    </div>
+
+    <table>
+        <thead>
+            <tr><th>Metrica</th><th>Actual</th><th>Estimado con SBERT</th></tr>
+        </thead>
+        <tbody>
+            <tr><td>Accuracy</td><td>0.893</td><td>0.91-0.93</td></tr>
+            <tr><td>F1-macro</td><td>0.847</td><td>0.86-0.88</td></tr>
+            <tr><td>Cobertura</td><td>73.3%</td><td>78-82%</td></tr>
+        </tbody>
+    </table>
+
+    <!-- 8 -->
+    <h2 id="gnn">8. GNN — Propuesta Futura</h2>
+    <p>Cero codigo actual. Una mencion en el reporte de estado como prioridad media.</p>
+
+    <p>Los anti-patrones son relaciones entre entidades, no solo propiedades individuales:</p>
+    <ul>
+        <li><code>wrong_data_types</code> &rarr; relacion nombre-tipo</li>
+        <li><code>eav_pattern</code> &rarr; relacion entre 3 columnas</li>
+        <li><code>self_referencing</code> &rarr; FK consigo misma</li>
+    </ul>
+
+    <h3>Arquitectura propuesta</h3>
+    <div class="flow">
+        <span class="flow-step">Grafo Schema</span>
+        <span class="flow-arrow">&rarr;</span>
+        <span class="flow-step">GCN 64</span>
+        <span class="flow-arrow">&rarr;</span>
+        <span class="flow-step">GCN 32</span>
+        <span class="flow-arrow">&rarr;</span>
+        <span class="flow-step">Readout</span>
+        <span class="flow-arrow">&rarr;</span>
+        <span class="flow-step active">Clasificador 10</span>
+    </div>
+
+    <h3>Ventajas vs Limitaciones</h3>
+    <div class="compare">
+        <div class="compare-box">
+            <h4>Ventajas</h4>
+            <ul>
+                <li>Captura relaciones automaticamente</li>
+                <li>Puede descubrir nuevos patrones</li>
+            </ul>
+        </div>
+        <div class="compare-box">
+            <h4>Limitaciones</h4>
+            <ul>
+                <li>Dataset pequeno (243 columnas)</li>
+                <li>Overfitting casi garantizado</li>
+                <li>+200MB de dependencias</li>
+            </ul>
+        </div>
+    </div>
+
+    <blockquote>Cuando el proyecto escale a +1000 tablas con ground truth acumulado y multiples SGBDs, el GNN tendra sentido.</blockquote>
+
+    <!-- 9 -->
+    <h2 id="roadmap">9. Roadmap</h2>
+    <div class="timeline">
+        <div class="timeline-item">
+            <div class="timeline-title">Fase 1: SBERT como Feature</div>
+            <div class="timeline-duration">1-2 semanas</div>
+            <ol>
+                <li>Refactorizar <code>bert_embedder.py</code> para usar SentenceTransformer class</li>
+                <li>Modificar <code>classify()</code> para recibir phi como parametro opcional</li>
+                <li>Agregar logica de desempate por similitud coseno</li>
+                <li>Evaluar impacto en accuracy/F1</li>
+            </ol>
+        </div>
+        <div class="timeline-item phase-2">
+            <div class="timeline-title">Fase 2: GNN como Clasificador Paralelo</div>
+            <div class="timeline-duration">2-3 meses</div>
+            <ol>
+                <li>Agregar torch_geometric y networkx</li>
+                <li>Implementar schema_graph.py y gnn_classifier.py</li>
+                <li>Experimentar en notebook 05_gnn_exploration.ipynb</li>
+                <li>Evaluar GNN vs rule engine</li>
+            </ol>
+        </div>
+        <div class="timeline-item phase-3">
+            <div class="timeline-title">Fase 3: Ensemble</div>
+            <div class="timeline-duration">1 mes</div>
+            <p>Combinar rule engine (0.5) + GNN (0.3) + SBERT (0.2) con weighted voting.</p>
+        </div>
+    </div>
+
+    <!-- 10 -->
+    <h2 id="decisiones">10. Decisiones Tecnicas</h2>
+    <table class="decision-table">
+        <thead>
+            <tr><th>Decision</th><th>Alternativa</th><th>Razon</th></tr>
+        </thead>
+        <tbody>
+            <tr><td>Reglas sobre ML</td><td>SVM / Random Forest</td><td>F1=0.17, dataset pequeno</td></tr>
+            <tr><td>Token-boundary matching</td><td>Substring</td><td>Falsos positivos ('fec' en 'afectada')</td></tr>
+            <tr><td>Report-level separados</td><td>En classify()</td><td>Enmascararian detecciones</td></tr>
+            <tr><td>Ground truth manual</td><td>Rule-engine-aligned</td><td>Evaluacion circular</td></tr>
+            <tr><td>Sentence-transformers</td><td>BERT + [CLS]</td><td>CLS=29.19 vs SBERT=74.89</td></tr>
+            <tr><td>Prioridades en merge</td><td>Promedio/voting</td><td>date_as_text es mas especifico</td></tr>
+            <tr><td>polymorphic &gt; giant_table</td><td>Propagar a todos</td><td>Issue #7: _O_ es polymorphic</td></tr>
+        </tbody>
+    </table>
+
+    <h3>Referencias</h3>
+    <ul>
+        <li>SBERT Paper: arXiv:1908.10084</li>
+        <li>MiniLM-L12-v2: sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2</li>
+        <li>torch_geometric: PyTorch Geometric</li>
+        <li>Oracle Data Dictionary: ALL_TAB_COLUMNS, ALL_CONSTRAINTS, ALL_CONS_COLUMNS</li>
+        <li>Issues #1-#7 en GitHub</li>
+    </ul>
+
+    <div class="footer">
+        db_bad_clust — Reporte generado el 27 de Agosto, 2026
+    </div>
+
+</div>
+
+</body>
+</html>

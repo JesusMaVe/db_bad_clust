@@ -16,18 +16,18 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 
-import pytest
 import numpy as np
-from structural_encoder import (
-    StructuralEncoder,
-    type_vocab_size,
-    constraint_dim,
-    statistical_dim,
+import pytest
+
+from db_bad_clust.data.schema_extractor import ColumnMetadata
+from db_bad_clust.features.structural_encoder import (
     CANONICAL_TYPES,
     CONSTRAINT_NAMES,
+    StructuralEncoder,
+    constraint_dim,
+    statistical_dim,
+    type_vocab_size,
 )
-from schema_extractor import ColumnMetadata
-
 
 # ── Fixtures ────────────────────────────────────────────────────────────
 
