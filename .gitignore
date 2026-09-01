@@ -30,7 +30,9 @@ Untitled.ipynb
 # Output (generated artifacts)
 output/*.json
 output/*.sql
+output/*.csv
 output/generated/
+# manual_labels.csv is hand-written input, not generated — keep it tracked
 !output/manual_labels.csv
 
 # Planning docs (local only) — reports under docs/ are tracked

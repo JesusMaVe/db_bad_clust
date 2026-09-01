@@ -7,8 +7,10 @@ table and tagged with severity / effort / impact. The script is read-only:
 this module never executes DDL against the database.
 
 Usage:
-    .venv/bin/python ddl_generator.py --pickle output/intermediate_01.pkl
-    .venv/bin/python ddl_generator.py --config config.yaml --output fixes.sql
+    db-bad-clust audit --sql output/fix.sql      # the CLI is the caller
+
+    from db_bad_clust.generation.ddl_generator import DDLGenerator
+    sql = DDLGenerator().from_schema(schema)
 """
 
 from __future__ import annotations
