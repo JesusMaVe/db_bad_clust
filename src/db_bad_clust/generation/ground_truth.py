@@ -87,11 +87,11 @@ def build_ground_truth_map() -> dict[str, str]:
     Returns:
         Dict keyed by "TABLE_NAME.COLUMN_NAME" with anti-pattern label.
     """
-    from db_bad_clust.generation.schema_generator import SyntheticSchemaGenerator
+    from db_bad_clust.generation.schema_adapter import to_database_schema
     from db_bad_clust.rules.rule_engine import classify as classify_schema
 
     tables: list[AntiPatternTable] = generate_poorly_designed_tables()
-    schema = SyntheticSchemaGenerator.to_database_schema(tables)
+    schema = to_database_schema(tables)
     results = classify_schema(schema=schema)
 
     gt: dict[str, str] = {}

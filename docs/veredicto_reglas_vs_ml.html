@@ -1,0 +1,1281 @@
+<title>Por qué ganaron las reglas</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600;8..60,700&display=swap">
+
+<style>
+  :root {
+    --paper:      #F4F6F8;
+    --surface:    #FFFFFF;
+    --sunken:     #EAEEF2;
+    --ink:        #0F1620;
+    --ink-soft:   #47535F;
+    --ink-faint:  #74818D;
+    --rule:       #D4DBE2;
+    --rule-soft:  #E4E9EE;
+    --branch-a:   #2B5C8A;
+    --branch-a-w: #DCE7F1;
+    --branch-b:   #A66A45;
+    --branch-b-w: #F0E3DA;
+    --zero:       #B23A48;
+    --shadow:     0 1px 2px rgba(15,22,32,.05), 0 8px 24px -12px rgba(15,22,32,.18);
+
+    --serif: "Source Serif 4", Georgia, "Times New Roman", serif;
+    --sans:  "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --mono:  "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper:      #0F1620;
+      --surface:    #161F2B;
+      --sunken:     #1C2733;
+      --ink:        #E8EDF2;
+      --ink-soft:   #A5B2BF;
+      --ink-faint:  #77848F;
+      --rule:       #2A3745;
+      --rule-soft:  #212D3A;
+      --branch-a:   #7FB2DE;
+      --branch-a-w: #22364A;
+      --branch-b:   #D69A72;
+      --branch-b-w: #3A2C22;
+      --zero:       #E4737F;
+      --shadow:     0 1px 2px rgba(0,0,0,.4), 0 8px 24px -12px rgba(0,0,0,.6);
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --paper:      #0F1620;
+    --surface:    #161F2B;
+    --sunken:     #1C2733;
+    --ink:        #E8EDF2;
+    --ink-soft:   #A5B2BF;
+    --ink-faint:  #77848F;
+    --rule:       #2A3745;
+    --rule-soft:  #212D3A;
+    --branch-a:   #7FB2DE;
+    --branch-a-w: #22364A;
+    --branch-b:   #D69A72;
+    --branch-b-w: #3A2C22;
+    --zero:       #E4737F;
+    --shadow:     0 1px 2px rgba(0,0,0,.4), 0 8px 24px -12px rgba(0,0,0,.6);
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 16.5px;
+    line-height: 1.62;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .page {
+    max-width: 78rem;
+    margin: 0 auto;
+    padding: clamp(2rem, 5vw, 4.5rem) clamp(1.1rem, 4vw, 3rem) 6rem;
+    display: flex;
+    flex-direction: column;
+    gap: clamp(2.75rem, 5vw, 4rem);
+  }
+
+  .prose { max-width: 40rem; }
+
+  h1, h2, h3 { font-family: var(--serif); text-wrap: balance; margin: 0; }
+
+  h1 {
+    font-size: clamp(2.1rem, 5.4vw, 3.35rem);
+    font-weight: 700;
+    line-height: 1.08;
+    letter-spacing: -.018em;
+  }
+
+  h2 {
+    font-size: clamp(1.4rem, 3vw, 1.85rem);
+    font-weight: 600;
+    line-height: 1.2;
+    letter-spacing: -.012em;
+  }
+
+  h3 {
+    font-size: 1.1rem;
+    font-weight: 600;
+    line-height: 1.3;
+  }
+
+  p { margin: 0; }
+  .prose > * + * { margin-top: 1rem; }
+
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: .715rem;
+    font-weight: 500;
+    letter-spacing: .16em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+  }
+
+  .lede {
+    font-family: var(--serif);
+    font-size: clamp(1.12rem, 2.3vw, 1.32rem);
+    line-height: 1.5;
+    color: var(--ink-soft);
+  }
+
+  code, .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+
+  code {
+    font-size: .875em;
+    background: var(--sunken);
+    padding: .12em .38em;
+    border-radius: 3px;
+  }
+
+  section { display: flex; flex-direction: column; gap: 1.5rem; }
+
+  .section-head { display: flex; flex-direction: column; gap: .55rem; max-width: 40rem; }
+
+  hr {
+    border: 0;
+    border-top: 1px solid var(--rule);
+    margin: 0;
+  }
+
+  /* ── Header ─────────────────────────────────────────── */
+
+  header { display: flex; flex-direction: column; gap: 1.15rem; }
+
+  .meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: .5rem 1.4rem;
+    font-family: var(--mono);
+    font-size: .76rem;
+    color: var(--ink-faint);
+    padding-top: 1.15rem;
+    border-top: 1px solid var(--rule);
+  }
+
+  /* ── Verdict scoreboard ─────────────────────────────── */
+
+  .board {
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-radius: 10px;
+    box-shadow: var(--shadow);
+    overflow: hidden;
+  }
+
+  .board-head {
+    display: flex;
+    flex-wrap: wrap;
+    gap: .4rem 1.5rem;
+    align-items: baseline;
+    padding: 1.15rem 1.5rem;
+    border-bottom: 1px solid var(--rule);
+    background: var(--sunken);
+  }
+
+  .board-head h3 { font-family: var(--sans); font-size: .93rem; font-weight: 600; }
+  .board-head .note { font-size: .81rem; color: var(--ink-faint); }
+
+  .metrics {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(13.5rem, 1fr));
+  }
+
+  .metric {
+    padding: 1.35rem 1.5rem 1.5rem;
+    border-right: 1px solid var(--rule-soft);
+    border-bottom: 1px solid var(--rule-soft);
+    display: flex;
+    flex-direction: column;
+    gap: .9rem;
+  }
+
+  .metric-name {
+    font-family: var(--mono);
+    font-size: .705rem;
+    letter-spacing: .13em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+  }
+
+  .metric-name span { text-transform: none; letter-spacing: 0; display: block; margin-top: .3rem; font-size: .78rem; }
+
+  .duel { display: flex; flex-direction: column; gap: .62rem; }
+
+  .duel-row { display: flex; flex-direction: column; gap: .26rem; }
+
+  .duel-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: .75rem;
+  }
+
+  .duel-label { font-size: .8rem; color: var(--ink-soft); }
+
+  .duel-val {
+    font-family: var(--mono);
+    font-variant-numeric: tabular-nums;
+    font-size: 1.06rem;
+    font-weight: 600;
+  }
+
+  .bar { height: 6px; border-radius: 3px; overflow: hidden; }
+  .bar-a { background: var(--branch-a-w); }
+  .bar-b { background: var(--branch-b-w); }
+  .bar > i { display: block; height: 100%; border-radius: 3px; }
+  .bar-a > i { background: var(--branch-a); }
+  .bar-b > i { background: var(--branch-b); }
+
+  .a-tone { color: var(--branch-a); }
+  .b-tone { color: var(--branch-b); }
+
+  /* ── Tables ─────────────────────────────────────────── */
+
+  .scroll { overflow-x: auto; border: 1px solid var(--rule); border-radius: 10px; background: var(--surface); }
+
+  table { border-collapse: collapse; width: 100%; font-size: .875rem; }
+
+  th, td { padding: .6rem .85rem; text-align: left; border-bottom: 1px solid var(--rule-soft); }
+
+  thead th {
+    font-family: var(--mono);
+    font-size: .69rem;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    font-weight: 500;
+    background: var(--sunken);
+    white-space: nowrap;
+  }
+
+  tbody tr:last-child td { border-bottom: 0; }
+
+  .num { font-family: var(--mono); font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+  .col-name { font-family: var(--mono); font-size: .81rem; white-space: nowrap; }
+  .is-zero { color: var(--zero); font-weight: 600; }
+
+  /* ── Per-class paired bars ──────────────────────────── */
+
+  .classes { display: flex; flex-direction: column; gap: 0; }
+
+  .class-row {
+    display: grid;
+    grid-template-columns: minmax(9rem, 12rem) 1fr;
+    gap: 1rem;
+    align-items: center;
+    padding: .62rem 0;
+    border-bottom: 1px solid var(--rule-soft);
+  }
+
+  .class-row:last-child { border-bottom: 0; }
+
+  .class-name { font-family: var(--mono); font-size: .8rem; }
+
+  .class-bars { display: flex; flex-direction: column; gap: .3rem; min-width: 0; }
+
+  .cb { display: grid; grid-template-columns: 1fr 3.1rem; gap: .7rem; align-items: center; }
+
+  .cb-track { height: 10px; border-radius: 2px; }
+  .cb-track > i { display: block; height: 100%; border-radius: 2px; min-width: 2px; }
+
+  .cb-val { font-family: var(--mono); font-variant-numeric: tabular-nums; font-size: .76rem; text-align: right; }
+
+  .legend { display: flex; flex-wrap: wrap; gap: 1.25rem; font-size: .81rem; color: var(--ink-soft); }
+  .legend b { display: inline-flex; align-items: center; gap: .42rem; font-weight: 500; }
+  .swatch { width: 11px; height: 11px; border-radius: 2px; display: inline-block; }
+
+  /* ── Callouts ───────────────────────────────────────── */
+
+  .note-box {
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-left: 3px solid var(--branch-a);
+    border-radius: 0 8px 8px 0;
+    padding: 1.15rem 1.35rem;
+    display: flex;
+    flex-direction: column;
+    gap: .55rem;
+    max-width: 44rem;
+  }
+
+  .note-box.warn { border-left-color: var(--branch-b); }
+  .note-box h3 { font-family: var(--sans); font-size: .93rem; }
+  .note-box p { font-size: .93rem; color: var(--ink-soft); }
+
+  /* ── Figures ────────────────────────────────────────── */
+
+  figure { margin: 0; display: flex; flex-direction: column; gap: .8rem; }
+
+  .figframe {
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-radius: 10px;
+    padding: 1.4rem 1.2rem;
+    overflow-x: auto;
+  }
+
+  .figframe svg { display: block; max-width: 100%; height: auto; margin: 0 auto; min-width: 34rem; }
+
+  figcaption { font-size: .85rem; color: var(--ink-faint); max-width: 44rem; }
+
+  .dgm-box { fill: var(--sunken); stroke: currentColor; stroke-opacity: .28; }
+  .dgm-label { fill: var(--ink); font-size: 12.5px; font-family: var(--sans); }
+  .dgm-sub { fill: var(--ink-faint); font-size: 10.5px; font-family: var(--mono); }
+  .dgm-line { stroke: currentColor; stroke-opacity: .45; fill: none; }
+  .dgm-branch { font-family: var(--mono); font-size: 10.5px; letter-spacing: .14em; }
+
+  /* ── Weight inversion ───────────────────────────────── */
+
+  .weights { display: flex; flex-direction: column; gap: 1.15rem; }
+
+  .wrow { display: flex; flex-direction: column; gap: .42rem; }
+
+  .wtop { display: flex; justify-content: space-between; align-items: baseline; gap: 1rem; flex-wrap: wrap; }
+  .wtop strong { font-size: .93rem; font-weight: 600; }
+  .wtop span { font-size: .81rem; color: var(--ink-faint); }
+
+  .wbar { display: flex; height: 30px; border-radius: 4px; overflow: hidden; border: 1px solid var(--rule); }
+
+  .wseg {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: var(--mono);
+    font-size: .7rem;
+    color: var(--surface);
+    white-space: nowrap;
+    overflow: hidden;
+  }
+
+  .wseg.bert  { background: var(--branch-b); }
+  .wseg.tipo  { background: var(--branch-a); opacity: .55; }
+  .wseg.rest  { background: var(--branch-a); }
+  .wseg.stat  { background: var(--branch-a); opacity: .3; }
+  .wseg.none  { background: var(--sunken); color: var(--ink-faint); border-right: 1px solid var(--rule); }
+
+  .wlegend { display: flex; flex-wrap: wrap; gap: .5rem 1.1rem; font-size: .78rem; color: var(--ink-soft); }
+
+  /* ── Path timeline ──────────────────────────────────── */
+
+  .path { display: flex; flex-direction: column; gap: 0; }
+
+  .pstep {
+    display: grid;
+    grid-template-columns: 8.5rem 1fr;
+    gap: 1.2rem;
+    padding: 1.15rem 0;
+    border-top: 1px solid var(--rule);
+  }
+
+  .pstep:last-child { border-bottom: 1px solid var(--rule); }
+
+  .pwhen {
+    font-family: var(--mono);
+    font-size: .72rem;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    padding-top: .18rem;
+  }
+
+  .pbody { display: flex; flex-direction: column; gap: .45rem; min-width: 0; }
+  .pbody h3 { font-family: var(--sans); font-size: .95rem; }
+  .pbody p { font-size: .91rem; color: var(--ink-soft); max-width: 38rem; }
+
+  .pflag {
+    font-family: var(--mono);
+    font-size: .74rem;
+    width: fit-content;
+    padding: .22rem .55rem;
+    border-radius: 4px;
+    background: var(--sunken);
+    color: var(--ink);
+  }
+
+  .pflag.turn { background: var(--branch-b-w); color: var(--branch-b); }
+  .pflag.win  { background: var(--branch-a-w); color: var(--branch-a); }
+
+  /* ── Numbered bets ──────────────────────────────────── */
+
+  .bets { display: flex; flex-direction: column; gap: 0; counter-reset: bet; }
+
+  .bet {
+    display: grid;
+    grid-template-columns: 3.1rem 1fr;
+    gap: 1.15rem;
+    padding: 1.5rem 0;
+    border-top: 1px solid var(--rule);
+  }
+
+  .bet::before {
+    counter-increment: bet;
+    content: counter(bet, decimal-leading-zero);
+    font-family: var(--mono);
+    font-size: .82rem;
+    font-weight: 500;
+    color: var(--branch-b);
+    padding-top: .12rem;
+  }
+
+  .bet-body { display: flex; flex-direction: column; gap: .6rem; min-width: 0; }
+  .bet-body p { color: var(--ink-soft); font-size: .95rem; max-width: 38rem; }
+
+  .bet-score {
+    font-family: var(--mono);
+    font-size: .8rem;
+    color: var(--ink);
+    background: var(--sunken);
+    border-radius: 5px;
+    padding: .5rem .8rem;
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: .3rem 1rem;
+    width: fit-content;
+    max-width: 100%;
+  }
+
+  /* ── Footer ─────────────────────────────────────────── */
+
+  footer {
+    display: flex;
+    flex-direction: column;
+    gap: .8rem;
+    padding-top: 1.6rem;
+    border-top: 1px solid var(--rule);
+    font-size: .87rem;
+    color: var(--ink-faint);
+    max-width: 44rem;
+  }
+
+  pre {
+    font-family: var(--mono);
+    font-size: .81rem;
+    background: var(--sunken);
+    border: 1px solid var(--rule);
+    border-radius: 7px;
+    padding: .85rem 1rem;
+    overflow-x: auto;
+    margin: 0;
+    color: var(--ink);
+  }
+
+  @media (max-width: 34rem) {
+    .class-row { grid-template-columns: 1fr; gap: .45rem; }
+    .bet { grid-template-columns: 1fr; gap: .5rem; }
+  }
+</style>
+
+<div class="page">
+
+  <header>
+    <div class="eyebrow">db_bad_clust &middot; evidencia medida</div>
+    <h1>Por qué ganaron las reglas</h1>
+    <p class="lede prose">
+      El proyecto construyó dos formas de detectar bases de datos mal diseñadas: un motor de
+      reglas escritas a mano y un pipeline de machine learning que agrupa columnas por su
+      cuenta. Este documento muestra cómo trabaja cada una, el camino que llevó de apostar por
+      la segunda a quedarse con la primera, y las mediciones que forzaron ese cambio.
+    </p>
+    <div class="meta">
+      <span>243 columnas &middot; 23 tablas</span>
+      <span>Oracle 23c</span>
+      <span>Etiquetas manuales, sin circularidad</span>
+      <span>Reproducible sin base de datos</span>
+    </div>
+  </header>
+
+  <section>
+    <div class="section-head">
+      <h2>El veredicto</h2>
+      <p>
+        Cuatro medidas distintas. La Rama A gana las cuatro &mdash; incluidas las dos que son
+        el terreno natural de la Rama B.
+      </p>
+    </div>
+
+    <div class="board">
+      <div class="board-head">
+        <h3>Rama A (motor de reglas) contra Rama B (clustering)</h3>
+        <span class="note">Contra las mismas 243 columnas etiquetadas a mano</span>
+      </div>
+      <div class="metrics">
+
+        <div class="metric">
+          <div class="metric-name">ARI <span>¿agrupó igual que la verdad?</span></div>
+          <div class="duel">
+            <div class="duel-row">
+              <div class="duel-top"><span class="duel-label">Rama A</span><span class="duel-val a-tone">0.7667</span></div>
+              <div class="bar bar-a"><i style="width:76.7%"></i></div>
+            </div>
+            <div class="duel-row">
+              <div class="duel-top"><span class="duel-label">Rama B</span><span class="duel-val b-tone">0.5008</span></div>
+              <div class="bar bar-b"><i style="width:50.1%"></i></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="metric">
+          <div class="metric-name">NMI <span>¿cuánta información comparte?</span></div>
+          <div class="duel">
+            <div class="duel-row">
+              <div class="duel-top"><span class="duel-label">Rama A</span><span class="duel-val a-tone">0.8058</span></div>
+              <div class="bar bar-a"><i style="width:80.6%"></i></div>
+            </div>
+            <div class="duel-row">
+              <div class="duel-top"><span class="duel-label">Rama B</span><span class="duel-val b-tone">0.4199</span></div>
+              <div class="bar bar-b"><i style="width:42%"></i></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="metric">
+          <div class="metric-name">Exactitud <span>% de columnas acertadas</span></div>
+          <div class="duel">
+            <div class="duel-row">
+              <div class="duel-top"><span class="duel-label">Rama A</span><span class="duel-val a-tone">0.8930</span></div>
+              <div class="bar bar-a"><i style="width:89.3%"></i></div>
+            </div>
+            <div class="duel-row">
+              <div class="duel-top"><span class="duel-label">Rama B</span><span class="duel-val b-tone">0.7078</span></div>
+              <div class="bar bar-b"><i style="width:70.8%"></i></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="metric">
+          <div class="metric-name">F1-macro <span>¿acierta en todas las categorías?</span></div>
+          <div class="duel">
+            <div class="duel-row">
+              <div class="duel-top"><span class="duel-label">Rama A</span><span class="duel-val a-tone">0.8467</span></div>
+              <div class="bar bar-a"><i style="width:84.7%"></i></div>
+            </div>
+            <div class="duel-row">
+              <div class="duel-top"><span class="duel-label">Rama B</span><span class="duel-val b-tone">0.2639</span></div>
+              <div class="bar bar-b"><i style="width:26.4%"></i></div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <div class="note-box warn">
+      <h3>Y la Rama B compitió con ventaja</h3>
+      <p>
+        Las dos últimas medidas le regalan información a la Rama B: para poder calcularlas hay
+        que ponerle nombre a sus grupos, y ese nombre se saca de las respuestas correctas. Es
+        decir, a la Rama B <em>se le dijo</em> cómo llamar a sus propios montones. Aun con esa
+        ayuda que la Rama A nunca tuvo, pierde. Su 0.7078 no es su resultado real: es su techo.
+      </p>
+    </div>
+  </section>
+
+  <hr>
+
+  <section>
+    <div class="section-head">
+      <h2>Cómo trabaja cada rama</h2>
+      <p>
+        Las dos arrancan del mismo lugar: una extracción del catálogo de Oracle. A partir de
+        ahí se separan, y la diferencia decisiva está en lo que cada una entrega al final.
+      </p>
+    </div>
+
+    <figure>
+      <div class="figframe">
+        <svg viewBox="0 0 900 590" role="img"
+             aria-label="Las dos ramas parten de la misma extracción de Oracle. La Rama A pasa por el motor de reglas y produce directamente una etiqueta con nombre por columna, y de ahí las recomendaciones y el SQL correctivo. La Rama B pasa por BERT y el vector compuesto, luego PCA y HDBSCAN, y produce grupos sin nombre que solo se convierten en etiquetas tomando prestadas las etiquetas manuales para bautizarlos.">
+          <defs>
+            <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5"
+                    markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor" fill-opacity=".45"></path>
+            </marker>
+            <marker id="ahb" viewBox="0 0 10 10" refX="9" refY="5"
+                    markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--branch-b)"></path>
+            </marker>
+          </defs>
+
+          <!-- Shared origin -->
+          <rect class="dgm-box" x="360" y="16" width="180" height="42" rx="6"></rect>
+          <text class="dgm-label" x="450" y="42" text-anchor="middle">Oracle 23c</text>
+
+          <line class="dgm-line" x1="450" y1="58" x2="450" y2="80" marker-end="url(#ah)"></line>
+
+          <rect class="dgm-box" x="330" y="86" width="240" height="42" rx="6"></rect>
+          <text class="dgm-label" x="450" y="105" text-anchor="middle">schema_extractor</text>
+          <text class="dgm-sub" x="450" y="120" text-anchor="middle">23 tablas · 243 columnas</text>
+
+          <!-- Split -->
+          <path class="dgm-line" d="M 450 128 L 450 148 L 210 148 L 210 170" marker-end="url(#ah)"></path>
+          <path class="dgm-line" d="M 450 128 L 450 148 L 690 148 L 690 170" marker-end="url(#ah)"></path>
+
+          <text class="dgm-branch" x="210" y="166" text-anchor="middle"
+                fill="var(--branch-a)">RAMA A</text>
+          <text class="dgm-branch" x="690" y="166" text-anchor="middle"
+                fill="var(--branch-b)">RAMA B</text>
+
+          <!-- Branch A -->
+          <rect class="dgm-box" x="85" y="176" width="250" height="46" rx="6"></rect>
+          <text class="dgm-label" x="210" y="196" text-anchor="middle">motor de reglas</text>
+          <text class="dgm-sub" x="210" y="212" text-anchor="middle">heurísticas escritas a mano</text>
+
+          <line class="dgm-line" x1="210" y1="222" x2="210" y2="256" marker-end="url(#ah)"></line>
+
+          <rect class="dgm-box" x="85" y="262" width="250" height="46" rx="6"
+                stroke="var(--branch-a)" stroke-opacity="1"></rect>
+          <text class="dgm-label" x="210" y="282" text-anchor="middle">etiqueta CON NOMBRE</text>
+          <text class="dgm-sub" x="210" y="298" text-anchor="middle">&quot;tipo equivocado&quot;</text>
+
+          <line class="dgm-line" x1="210" y1="308" x2="210" y2="342" marker-end="url(#ah)"></line>
+
+          <rect class="dgm-box" x="85" y="348" width="250" height="46" rx="6"></rect>
+          <text class="dgm-label" x="210" y="368" text-anchor="middle">recomendaciones</text>
+          <text class="dgm-sub" x="210" y="384" text-anchor="middle">+ SQL correctivo</text>
+
+          <!-- Branch B -->
+          <rect class="dgm-box" x="565" y="176" width="250" height="46" rx="6"></rect>
+          <text class="dgm-label" x="690" y="196" text-anchor="middle">BERT + estructura</text>
+          <text class="dgm-sub" x="690" y="212" text-anchor="middle">vector compuesto φ</text>
+
+          <line class="dgm-line" x1="690" y1="222" x2="690" y2="256" marker-end="url(#ah)"></line>
+
+          <rect class="dgm-box" x="565" y="262" width="250" height="46" rx="6"></rect>
+          <text class="dgm-label" x="690" y="282" text-anchor="middle">PCA 20D → HDBSCAN</text>
+          <text class="dgm-sub" x="690" y="298" text-anchor="middle">agrupa por parecido</text>
+
+          <line class="dgm-line" x1="690" y1="308" x2="690" y2="342" marker-end="url(#ah)"></line>
+
+          <rect class="dgm-box" x="565" y="348" width="250" height="46" rx="6"
+                stroke="var(--branch-b)" stroke-opacity="1"></rect>
+          <text class="dgm-label" x="690" y="368" text-anchor="middle">grupos SIN NOMBRE</text>
+          <text class="dgm-sub" x="690" y="384" text-anchor="middle">&quot;grupo 4&quot;</text>
+
+          <line class="dgm-line" x1="690" y1="394" x2="690" y2="428" marker-end="url(#ah)"></line>
+
+          <rect class="dgm-box" x="565" y="434" width="250" height="46" rx="6"></rect>
+          <text class="dgm-label" x="690" y="454" text-anchor="middle">bautizo por mayoría</text>
+          <text class="dgm-sub" x="690" y="470" text-anchor="middle">recién aquí hay etiquetas</text>
+
+          <!-- The borrowed answers -->
+          <line x1="690" y1="524" x2="690" y2="488" stroke="var(--branch-b)"
+                stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#ahb)"></line>
+          <text class="dgm-sub" x="706" y="510" fill="var(--branch-b)">le presta las respuestas</text>
+
+          <rect x="565" y="524" width="250" height="42" rx="6"
+                fill="var(--branch-b-w)" stroke="var(--branch-b)" stroke-dasharray="5 4"></rect>
+          <text class="dgm-label" x="690" y="550" text-anchor="middle">etiquetas manuales</text>
+        </svg>
+      </div>
+      <figcaption>
+        La Rama A llega a una etiqueta con nombre en un paso. La Rama B necesita cuatro y aun
+        así termina en grupos anónimos: para convertirlos en un diagnóstico hay que decirle
+        cómo se llama cada grupo, y ese nombre sale de las respuestas correctas (flecha
+        punteada). Ese préstamo es exactamente lo que la Rama A nunca recibe.
+      </figcaption>
+    </figure>
+
+    <div class="prose">
+      <p>
+        Ahí está la asimetría de fondo. La Rama A produce un <strong>diagnóstico</strong>. La
+        Rama B produce un <strong>parecido</strong>: dice qué columnas se agrupan, pero no qué
+        tienen. Convertir un parecido en un diagnóstico exige información que solo tiene quien
+        ya conoce la respuesta.
+      </p>
+    </div>
+  </section>
+
+  <hr>
+
+  <section>
+    <div class="section-head">
+      <h2>El camino que se siguió</h2>
+      <p>
+        El proyecto no arrancó apostando por las reglas. Arrancó apostando fuerte por BERT, y
+        cambió de opinión porque las mediciones lo obligaron.
+      </p>
+    </div>
+
+    <div class="path">
+
+      <div class="pstep">
+        <div class="pwhen">El diseño</div>
+        <div class="pbody">
+          <h3>La hipótesis original</h3>
+          <p>
+            <em>"La combinación de embeddings BERT con features estructurales, agrupada con
+            DBSCAN, produce clusters más coherentes y detecta más anomalías que K-Means o Mean
+            Shift."</em> El vector compuesto le daba a BERT el peso dominante, y el motor de
+            reglas ni siquiera existía todavía.
+          </p>
+          <div class="pflag">α (BERT) = 0.60 · DBSCAN por defecto</div>
+        </div>
+      </div>
+
+      <div class="pstep">
+        <div class="pwhen">La medición</div>
+        <div class="pbody">
+          <h3>Nada se comportó como se esperaba</h3>
+          <p>
+            MeanShift quedó por debajo del azar. K-Means, el rival que DBSCAN debía superar,
+            salió adelante. Random Forest se estrelló contra categorías de 1 sola muestra, y el
+            One-Class SVM marcó el 83% de la base como sospechosa. Cuatro apuestas, cuatro
+            resultados negativos.
+          </p>
+          <div class="pflag turn">H₁ parcialmente refutada — K-Means (0.4085) supera a DBSCAN (0.3636)</div>
+          <p>
+            Ese veredicto se emitió contra el ground truth circular. Al re-medirlo hoy con las
+            etiquetas manuales, el orden se invierte y HDBSCAN queda arriba &mdash; pero para
+            entonces ya daba igual, porque el motor de reglas les sacaba 0.26 de ARI a todos.
+          </p>
+        </div>
+      </div>
+
+      <div class="pstep">
+        <div class="pwhen">La corrección</div>
+        <div class="pbody">
+          <h3>El giro de 180° en los pesos</h3>
+          <p>
+            Al barrer los pesos en vez de fijarlos por intuición, el óptimo de BERT resultó ser
+            <strong>cero</strong>. Lo que manda son las restricciones de la base — llaves,
+            nulos, unicidad. El diseño teórico tenía la prioridad exactamente al revés.
+          </p>
+          <div class="pflag turn">α (BERT) = 0.60 → 0.00</div>
+        </div>
+      </div>
+
+      <div class="pstep">
+        <div class="pwhen">La honestidad</div>
+        <div class="pbody">
+          <h3>Romper la evaluación circular</h3>
+          <p>
+            Hasta aquí el "ground truth" lo generaba el propio motor de reglas, así que su
+            exactitud de 0.9877 se estaba midiendo contra sí mismo. Etiquetar las 243 columnas
+            a mano bajó la cifra — y la volvió real.
+          </p>
+          <div class="pflag">0.9877 (circular) → 0.8930 (honesta)</div>
+        </div>
+      </div>
+
+      <div class="pstep">
+        <div class="pwhen">Hoy</div>
+        <div class="pbody">
+          <h3>La Rama A es la herramienta</h3>
+          <p>
+            El motor de reglas quedó como producto: audita, recomienda y genera el SQL de
+            corrección. La Rama B se conserva ejecutable pero fuera del camino, porque es la
+            evidencia que justifica no haberla usado. Borrarla dejaría la decisión sin respaldo.
+          </p>
+          <div class="pflag win">Rama A gana las cuatro métricas</div>
+        </div>
+      </div>
+
+    </div>
+
+    <h3>El giro de 180°, en una imagen</h3>
+    <div class="prose">
+      <p>
+        El vector que alimenta a la Rama B mezcla cuatro señales. Así se repartió el peso entre
+        ellas en el diseño, y así quedó después de medir:
+      </p>
+    </div>
+
+    <div class="weights">
+      <div class="wrow">
+        <div class="wtop">
+          <strong>Como se diseñó</strong>
+          <span>BERT manda: el significado del nombre es la señal principal</span>
+        </div>
+        <div class="wbar">
+          <div class="wseg bert" style="width:60%">BERT 0.60</div>
+          <div class="wseg tipo" style="width:15%">tipo .15</div>
+          <div class="wseg rest" style="width:15%">restr .15</div>
+          <div class="wseg stat" style="width:10%">.10</div>
+        </div>
+      </div>
+      <div class="wrow">
+        <div class="wtop">
+          <strong>Como quedó al medir</strong>
+          <span>BERT 0.00 — desaparece por completo de la barra</span>
+        </div>
+        <div class="wbar">
+          <div class="wseg tipo" style="width:35%">tipo 0.35</div>
+          <div class="wseg rest" style="width:45%">restricciones 0.45</div>
+          <div class="wseg stat" style="width:20%">estad. 0.20</div>
+        </div>
+      </div>
+      <div class="wlegend">
+        <span><strong>BERT</strong> — significado del nombre</span>
+        <span><strong>tipo</strong> — tipo de dato</span>
+        <span><strong>restricciones</strong> — llaves, nulos, unicidad</span>
+        <span><strong>estadísticos</strong> — tamaño</span>
+      </div>
+    </div>
+  </section>
+
+  <hr>
+
+  <section>
+    <div class="section-head">
+      <h2>Cómo se midió sin hacer trampa</h2>
+      <p>
+        Las dos ramas no producen lo mismo, y ahí estaba la trampa que había que resolver antes
+        de poder comparar nada.
+      </p>
+    </div>
+
+    <div class="prose">
+      <p>
+        El <strong>motor de reglas</strong> entrega diagnósticos con nombre: <em>"esta columna
+        es de tipo equivocado"</em>. El <strong>clustering</strong> entrega montones sin nombre:
+        <em>"esta columna cayó en el grupo 4"</em>. El grupo 4 no se llama nada. Nadie le puso
+        una etiqueta; el algoritmo solo dijo que esas columnas se parecen entre sí.
+      </p>
+      <p>
+        Por eso citar la exactitud de una contra el ARI de la otra no prueba nada: son dos
+        varas distintas, y cualquiera puede objetar que se eligió la vara que le convenía al
+        ganador. La solución fue <strong>medir las dos ramas con las dos varas</strong>:
+      </p>
+      <p>
+        <strong>Se bajó la Rama A a la cancha de la B.</strong> Un conjunto de etiquetas también
+        es una forma de agrupar &mdash; junta todas las columnas que recibieron el mismo
+        diagnóstico y ya tienes grupos. Así se le puede calcular ARI igual que al clustering.
+      </p>
+      <p>
+        <strong>Se subió la Rama B a la cancha de la A.</strong> A cada grupo se le puso el
+        nombre de la etiqueta más frecuente entre sus miembros. Si el grupo 4 tiene 90 columnas
+        marcadas como tabla gigante, el grupo 4 pasa a llamarse "tabla gigante". Este paso es el
+        que le regala información a la Rama B.
+      </p>
+    </div>
+  </section>
+
+  <hr>
+
+  <section>
+    <div class="section-head">
+      <h2>Por qué pierde la Rama B</h2>
+      <p>No es un margen apretado ni un detalle de configuración. Son tres causas estructurales.</p>
+    </div>
+
+    <h3>1. Hace montones, no diagnósticos</h3>
+    <div class="prose">
+      <p>
+        Un grupo solo puede tener un nombre, pero adentro cabe de todo. El grupo más grande que
+        formó la Rama B tiene 108 columnas: 90 son de tablas gigantes, pero también cayeron ahí
+        10 columnas perfectamente sanas y 4 con un problema completamente distinto.
+      </p>
+    </div>
+
+    <div class="scroll">
+      <table>
+        <thead>
+          <tr><th>Grupo</th><th class="num">Columnas</th><th>Qué hay adentro en realidad</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="col-name">grupo 4</td><td class="num">108</td>
+            <td>tabla gigante ×90, <strong>sanas ×10</strong>, polimórfica ×4, nombres inconsistentes ×3</td>
+          </tr>
+          <tr>
+            <td class="col-name">grupo 3</td><td class="num">27</td>
+            <td>sanas ×19, dato imposible ×3, nombres inconsistentes ×2, autorreferencia ×1</td>
+          </tr>
+          <tr>
+            <td class="col-name">grupo 5</td><td class="num">18</td>
+            <td>sanas ×13, palabra reservada ×3, EAV ×1, tipo equivocado ×1</td>
+          </tr>
+          <tr>
+            <td class="col-name">ruido</td><td class="num">20</td>
+            <td>sanas ×12, tipo equivocado ×5, nombres inconsistentes ×2, contradictoria ×1</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="prose">
+      <p>
+        Cuando al grupo 4 se le pone el nombre "tabla gigante", esas 10 columnas sanas quedan
+        acusadas de un problema que no tienen, y las 4 polimórficas quedan con el diagnóstico
+        equivocado. El montón no se puede partir: es la unidad mínima que el algoritmo sabe
+        producir.
+      </p>
+    </div>
+
+    <h3>2. Nunca llega a nombrar 6 de las 10 categorías</h3>
+    <div class="prose">
+      <p>
+        Aquí está el resultado más contundente. Un grupo se llama como su mayoría, así que un
+        problema que nunca es mayoría en ningún montón <strong>jamás se pronuncia</strong>. La
+        Rama B nunca dice "EAV", nunca dice "palabra reservada", nunca dice "polimórfica".
+        Puntúa cero en seis categorías. La Rama A puntúa perfecto en cinco de esas seis.
+      </p>
+    </div>
+
+    <div class="legend">
+      <b><span class="swatch" style="background:var(--branch-a)"></span> Rama A &mdash; motor de reglas</b>
+      <b><span class="swatch" style="background:var(--branch-b)"></span> Rama B &mdash; clustering</b>
+      <span>Puntaje por categoría, de 0 a 1</span>
+    </div>
+
+    <div class="classes">
+
+      <div class="class-row">
+        <div class="class-name">palabra reservada</div>
+        <div class="class-bars">
+          <div class="cb"><div class="cb-track bar-a"><i style="width:100%;background:var(--branch-a)"></i></div><span class="cb-val a-tone">1.000</span></div>
+          <div class="cb"><div class="cb-track bar-b"><i style="width:0.6%;background:var(--branch-b)"></i></div><span class="cb-val is-zero">0.000</span></div>
+        </div>
+      </div>
+
+      <div class="class-row">
+        <div class="class-name">polimórfica</div>
+        <div class="class-bars">
+          <div class="cb"><div class="cb-track bar-a"><i style="width:100%;background:var(--branch-a)"></i></div><span class="cb-val a-tone">1.000</span></div>
+          <div class="cb"><div class="cb-track bar-b"><i style="width:0.6%;background:var(--branch-b)"></i></div><span class="cb-val is-zero">0.000</span></div>
+        </div>
+      </div>
+
+      <div class="class-row">
+        <div class="class-name">EAV</div>
+        <div class="class-bars">
+          <div class="cb"><div class="cb-track bar-a"><i style="width:100%;background:var(--branch-a)"></i></div><span class="cb-val a-tone">1.000</span></div>
+          <div class="cb"><div class="cb-track bar-b"><i style="width:0.6%;background:var(--branch-b)"></i></div><span class="cb-val is-zero">0.000</span></div>
+        </div>
+      </div>
+
+      <div class="class-row">
+        <div class="class-name">contradictoria</div>
+        <div class="class-bars">
+          <div class="cb"><div class="cb-track bar-a"><i style="width:100%;background:var(--branch-a)"></i></div><span class="cb-val a-tone">1.000</span></div>
+          <div class="cb"><div class="cb-track bar-b"><i style="width:0.6%;background:var(--branch-b)"></i></div><span class="cb-val is-zero">0.000</span></div>
+        </div>
+      </div>
+
+      <div class="class-row">
+        <div class="class-name">autorreferencia</div>
+        <div class="class-bars">
+          <div class="cb"><div class="cb-track bar-a"><i style="width:100%;background:var(--branch-a)"></i></div><span class="cb-val a-tone">1.000</span></div>
+          <div class="cb"><div class="cb-track bar-b"><i style="width:0.6%;background:var(--branch-b)"></i></div><span class="cb-val is-zero">0.000</span></div>
+        </div>
+      </div>
+
+      <div class="class-row">
+        <div class="class-name">tipo equivocado</div>
+        <div class="class-bars">
+          <div class="cb"><div class="cb-track bar-a"><i style="width:96.3%;background:var(--branch-a)"></i></div><span class="cb-val a-tone">0.963</span></div>
+          <div class="cb"><div class="cb-track bar-b"><i style="width:55.6%;background:var(--branch-b)"></i></div><span class="cb-val b-tone">0.556</span></div>
+        </div>
+      </div>
+
+      <div class="class-row">
+        <div class="class-name">tabla gigante</div>
+        <div class="class-bars">
+          <div class="cb"><div class="cb-track bar-a"><i style="width:94.2%;background:var(--branch-a)"></i></div><span class="cb-val a-tone">0.942</span></div>
+          <div class="cb"><div class="cb-track bar-b"><i style="width:90.9%;background:var(--branch-b)"></i></div><span class="cb-val b-tone">0.909</span></div>
+        </div>
+      </div>
+
+      <div class="class-row">
+        <div class="class-name">sana</div>
+        <div class="class-bars">
+          <div class="cb"><div class="cb-track bar-a"><i style="width:85.3%;background:var(--branch-a)"></i></div><span class="cb-val a-tone">0.853</span></div>
+          <div class="cb"><div class="cb-track bar-b"><i style="width:68.7%;background:var(--branch-b)"></i></div><span class="cb-val b-tone">0.687</span></div>
+        </div>
+      </div>
+
+      <div class="class-row">
+        <div class="class-name">nombres inconsistentes</div>
+        <div class="class-bars">
+          <div class="cb"><div class="cb-track bar-a"><i style="width:70.8%;background:var(--branch-a)"></i></div><span class="cb-val a-tone">0.708</span></div>
+          <div class="cb"><div class="cb-track bar-b"><i style="width:48.8%;background:var(--branch-b)"></i></div><span class="cb-val b-tone">0.488</span></div>
+        </div>
+      </div>
+
+      <div class="class-row">
+        <div class="class-name">dato imposible</div>
+        <div class="class-bars">
+          <div class="cb"><div class="cb-track bar-a"><i style="width:0.6%;background:var(--branch-a)"></i></div><span class="cb-val is-zero">0.000</span></div>
+          <div class="cb"><div class="cb-track bar-b"><i style="width:0.6%;background:var(--branch-b)"></i></div><span class="cb-val is-zero">0.000</span></div>
+        </div>
+      </div>
+
+    </div>
+
+    <h3>3. El significado del nombre no dice si el diseño está mal</h3>
+    <div class="prose">
+      <p>
+        Esta es la razón de fondo, y explica por qué toda la apuesta por BERT no funcionó.
+        BERT entiende idioma: sabe que <code>FECHA_CREACION</code> significa "fecha de
+        creación", y que <code>customer_name</code> y <code>nombre_cliente</code> son lo mismo.
+        Eso es real y es impresionante.
+      </p>
+      <p>
+        Pero el problema de <code>AUDITORIA_LOG.FECHA</code> no es qué significa el nombre.
+        <strong>El problema es que guarda una fecha en un campo de texto.</strong> El nombre está
+        perfecto. Lo que está mal es el tipo de dato, y eso no vive en el idioma: vive en el
+        catálogo de Oracle, en un dato que dice <code>VARCHAR2</code> donde debería decir
+        <code>DATE</code>. La Rama B la marcó como sana. La Rama A la detectó.
+      </p>
+    </div>
+
+    <div class="scroll">
+      <table>
+        <thead>
+          <tr><th>Columna</th><th>Problema real</th><th>Dijo la Rama B</th></tr>
+        </thead>
+        <tbody>
+          <tr><td class="col-name">AUDITORIA_LOG.FECHA</td><td>tipo equivocado</td><td class="b-tone">sana</td></tr>
+          <tr><td class="col-name">CATEGORIAS.CAT_PADRE_ID</td><td>autorreferencia</td><td class="b-tone">sana</td></tr>
+          <tr><td class="col-name">CATEGORIAS.NIVEL</td><td>tipo equivocado</td><td class="b-tone">sana</td></tr>
+          <tr><td class="col-name">CONFIGURACION.CLAVE</td><td>EAV</td><td class="b-tone">sana</td></tr>
+          <tr><td class="col-name">CATEGORIAS.ACTIVO</td><td>contradictoria</td><td class="b-tone">nombres inconsistentes</td></tr>
+          <tr><td class="col-name">AUDITORIA_LOG.DETALLE</td><td>sana</td><td class="b-tone">tabla gigante</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="note-box warn">
+      <h3>BERT no solo no ayuda: estorba</h3>
+      <p>
+        Se probó subiendo poco a poco el peso que se le da a BERT, dejando todo lo demás igual.
+        Con BERT apagado, la Rama B logra su mejor resultado. Encenderlo aunque sea un poco
+        tumba el ARI de <span class="mono">0.5008</span> a <span class="mono">0.3049</span> y de
+        ahí ya no se recupera. La señal semántica no es neutral &mdash; le mete ruido a la
+        estructural, que es la que sí sirve.
+      </p>
+    </div>
+
+    <div class="scroll">
+      <table>
+        <thead>
+          <tr><th>Peso de BERT</th><th class="num">ARI</th><th class="num">NMI</th><th class="num">Exactitud</th><th>Lectura</th></tr>
+        </thead>
+        <tbody>
+          <tr><td class="col-name">0.00 &mdash; apagado</td><td class="num a-tone"><strong>0.5008</strong></td><td class="num">0.4199</td><td class="num">0.7078</td><td>su mejor resultado</td></tr>
+          <tr><td class="col-name">0.15</td><td class="num b-tone">0.3049</td><td class="num">0.4433</td><td class="num">0.7160</td><td>cae 40% de golpe</td></tr>
+          <tr><td class="col-name">0.30</td><td class="num b-tone">0.3081</td><td class="num">0.4652</td><td class="num">0.7160</td><td>no se recupera</td></tr>
+          <tr><td class="col-name">0.50</td><td class="num b-tone">0.3024</td><td class="num">0.4519</td><td class="num">0.7037</td><td>no se recupera</td></tr>
+          <tr><td class="col-name">0.70 &mdash; domina</td><td class="num b-tone">0.3014</td><td class="num">0.4512</td><td class="num">0.7037</td><td>no se recupera</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <hr>
+
+  <section>
+    <div class="section-head">
+      <h2>Las cuatro apuestas de machine learning</h2>
+      <p>
+        No fue una sola comparación perdida. El proyecto intentó cuatro caminos distintos de ML
+        y midió los cuatro. Ninguno funcionó, y cada uno falló por una razón diferente.
+      </p>
+    </div>
+
+    <div class="note-box">
+      <h3>Dos de estas cifras se volvieron a medir, y bajaron de dramatismo</h3>
+      <p>
+        Los números originales de MeanShift y Random Forest se tomaron contra el ground truth
+        <em>circular</em>, el que generaba el propio motor de reglas. Al re-medirlos contra las
+        etiquetas manuales — con <code>db-bad-clust compare --baselines</code> — el ML sale
+        bastante menos catastrófico de lo que decían. Sigue perdiendo con claridad, pero las
+        cifras honestas son otras y aquí se reportan las dos.
+      </p>
+    </div>
+
+    <div class="bets">
+
+      <div class="bet">
+        <div class="bet-body">
+          <h3>BERT como señal semántica</h3>
+          <p>
+            El diseño original le daba a BERT el peso dominante: 0.60 de 1.00. La medición
+            invirtió esa prioridad por completo &mdash; el óptimo resultó ser cero. Lo que
+            manda son las restricciones de la base (llaves, nulos, unicidad), no el idioma.
+          </p>
+          <div class="bet-score"><span>peso propuesto 0.60</span><span>peso óptimo medido <strong>0.00</strong></span></div>
+        </div>
+      </div>
+
+      <div class="bet">
+        <div class="bet-body">
+          <h3>MeanShift para agrupar por densidad</h3>
+          <p>
+            En la medición original quedó por debajo del azar. Al re-medirlo contra las
+            etiquetas manuales sube a 0.1383 &mdash; ya no es peor que una moneda, pero sigue
+            siendo el peor de los cinco algoritmos junto con DBSCAN. El método necesita estimar
+            densidad, y con 243 puntos esa estimación se degrada.
+          </p>
+          <div class="bet-score"><span>ARI <strong>0.1383</strong> (honesto)</span><span>&minus;0.0037 en la medición circular original</span></div>
+        </div>
+      </div>
+
+      <div class="bet">
+        <div class="bet-body">
+          <h3>Random Forest como clasificador supervisado</h3>
+          <p>
+            Se le dieron las respuestas para que aprendiera y aun así se queda muy corto:
+            <code>self_referencing</code> tiene <strong>1 sola columna</strong> en toda la base,
+            y otras tres categorías tienen 4 o 5. Ningún algoritmo aprende un patrón que vio una
+            vez. La desviación de ±0.15 lo delata: los pliegues de validación son degenerados
+            porque no hay muestras suficientes para repartir.
+          </p>
+          <div class="bet-score"><span>F1-macro <strong>0.5249</strong> ± 0.1522 (honesto)</span><span>0.1735 en la medición circular original</span><span>reglas: 0.8467</span></div>
+        </div>
+      </div>
+
+      <div class="bet">
+        <div class="bet-body">
+          <h3>One-Class SVM para detectar anomalías</h3>
+          <p>
+            Marcó 195 de 235 columnas como sospechosas &mdash; el 83% de la base. Un detector
+            que señala casi todo no señala nada. Se eliminó del proyecto, así que esta es la
+            única de las cuatro que ya no se puede volver a correr: queda como cifra histórica.
+          </p>
+          <div class="bet-score"><span><strong>83%</strong> marcado como anomalía</span><span>eliminado del código</span></div>
+        </div>
+      </div>
+
+    </div>
+
+    <h3>¿Y si el problema era el algoritmo?</h3>
+    <div class="prose">
+      <p>
+        La hipótesis original decía que agrupar por densidad debía ganarle a K-Means. Vale la
+        pena responderla con las etiquetas honestas: los cinco algoritmos, sobre el mismo vector,
+        con BERT apagado.
+      </p>
+    </div>
+
+    <div class="scroll">
+      <table>
+        <thead>
+          <tr><th>Algoritmo</th><th class="num">ARI</th><th class="num">NMI</th><th class="num">Grupos</th><th>Lectura</th></tr>
+        </thead>
+        <tbody>
+          <tr><td class="col-name">HDBSCAN</td><td class="num b-tone"><strong>0.5011</strong></td><td class="num">0.4206</td><td class="num">10</td><td>el mejor del grupo</td></tr>
+          <tr><td class="col-name">Agglomerative</td><td class="num">0.4717</td><td class="num">0.4169</td><td class="num">10</td><td>cerca</td></tr>
+          <tr><td class="col-name">K-Means</td><td class="num">0.4434</td><td class="num">0.3997</td><td class="num">10</td><td>cerca</td></tr>
+          <tr><td class="col-name">MeanShift</td><td class="num">0.1383</td><td class="num">0.2158</td><td class="num">9</td><td>colapsa</td></tr>
+          <tr><td class="col-name">DBSCAN</td><td class="num">0.1369</td><td class="num">0.1960</td><td class="num">2</td><td>solo encuentra 2 grupos</td></tr>
+          <tr><td class="col-name"><strong>Motor de reglas</strong></td><td class="num a-tone"><strong>0.7667</strong></td><td class="num a-tone"><strong>0.8058</strong></td><td class="num">9</td><td>ninguno se le acerca</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="prose">
+      <p>
+        Con etiquetas honestas, el algoritmo de densidad <strong>sí</strong> gana entre los de su
+        clase: HDBSCAN queda arriba, justo lo contrario de lo que concluyó la medición circular
+        de Fase 3. Pero eso no rescata la hipótesis, por dos razones. Primero, gana con
+        <strong>BERT apagado</strong>, y BERT era la otra mitad de la apuesta. Segundo, la
+        distancia entre el mejor algoritmo (0.5011) y el motor de reglas (0.7667) es mucho mayor
+        que la distancia entre el mejor y el peor algoritmo. Elegir mejor el algoritmo nunca iba
+        a cerrar esa brecha: el problema no estaba en cómo agrupar, sino en que agrupar no es
+        diagnosticar.
+      </p>
+    </div>
+  </section>
+
+  <hr>
+
+  <section>
+    <div class="section-head">
+      <h2>Dónde la Rama A también falla</h2>
+      <p>Un reporte que solo cuenta las victorias no es evidencia. Estos son sus dos puntos ciegos medidos.</p>
+    </div>
+
+    <div class="prose">
+      <p>
+        <strong>Hay 14 columnas donde la Rama B acierta y la Rama A se equivoca</strong>, y las
+        14 están en la misma tabla: <code>CLIENTES_DIRECCIONES</code>. El motor marca la tabla
+        entera como "nombres inconsistentes" y ese veredicto se contagia a todas sus columnas,
+        incluidas las que están bien. Es un falso positivo sistemático, no aleatorio &mdash; y
+        por eso es arreglable.
+      </p>
+      <p>
+        <strong>La categoría "dato imposible" puntúa cero en las dos ramas.</strong> Aquí no
+        falla el método sino los datos: detectarla requiere ver llaves foráneas, y esta base no
+        tiene ninguna declarada porque las tablas padre tienen duplicados y nulos que impiden
+        crearlas. No es un error del motor; es información que no existe en el catálogo.
+      </p>
+    </div>
+
+    <div class="scroll">
+      <table>
+        <thead>
+          <tr><th>Balance de desacuerdos</th><th class="num">Columnas</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>La Rama A acierta y la Rama B se equivoca</td><td class="num a-tone"><strong>59</strong></td></tr>
+          <tr><td>La Rama B acierta y la Rama A se equivoca</td><td class="num b-tone">14</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <hr>
+
+  <section>
+    <div class="section-head">
+      <h2>Qué significa esto</h2>
+    </div>
+    <div class="prose">
+      <p>
+        La Rama A gana en exactitud, gana en cobertura de categorías, y gana además en las dos
+        medidas que son el terreno propio de la Rama B. Gana aun cuando a la Rama B se le
+        regalan las respuestas para nombrar sus grupos. Y lo hace corriendo en segundos, sin
+        descargar un modelo de 470 MB, y explicando <em>por qué</em>: no dice "grupo 4", dice
+        "la columna se llama <code>TIMESTAMP</code>, que es palabra reservada en Oracle".
+      </p>
+      <p>
+        Ese último punto es el que más importa en una auditoría. Un diagnóstico que no se puede
+        explicar no se puede defender ante el equipo que tiene que arreglar la base.
+      </p>
+      <p>
+        Esto no vuelve inútil el trabajo de ML: es el que produjo la evidencia. Sin haberlo
+        construido y medido, "usamos reglas" sería una corazonada. Con él, es una decisión
+        respaldada por números que cualquiera puede volver a correr.
+      </p>
+    </div>
+
+    <div class="note-box">
+      <h3>Cómo reproducir estos números</h3>
+      <p>
+        No requiere Oracle levantado. Lee el pickle intermedio y las etiquetas manuales, y
+        vuelve a correr las dos ramas desde cero:
+      </p>
+      <pre>db-bad-clust compare --sweep --baselines</pre>
+      <p>
+        <code>--sweep</code> agrega el barrido de BERT y <code>--baselines</code> vuelve a correr
+        Random Forest y los cinco algoritmos de clustering. Escribe además
+        <code>output/head_to_head.csv</code> con el veredicto columna por columna, para auditar
+        cualquier cifra a mano.
+      </p>
+    </div>
+  </section>
+
+  <footer>
+    <p>
+      Todas las cifras de este documento se midieron ejecutando el comparador sobre las 243
+      columnas etiquetadas manualmente. Los resultados de la Rama A reproducen exactamente los
+      valores registrados en <code>AGENTS.md</code> (0.8930 / 0.8467), lo que confirma que el
+      comparador está bien construido.
+    </p>
+    <p>
+      MeanShift, Random Forest y la comparación de algoritmos se re-midieron contra las
+      etiquetas manuales con <code>compare --baselines</code>; donde el número histórico difiere,
+      se reportan ambos. La cifra del One-Class SVM viene de las mediciones de Fase 3
+      registradas en <code>docs/00_PROJECT_STATUS_REPORT.md</code> y no es re-medible: ese
+      código se eliminó del proyecto.
+    </p>
+  </footer>
+
+</div>
