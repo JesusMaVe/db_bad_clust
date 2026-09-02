@@ -105,15 +105,23 @@ def load_dataset(
     pickle_path: str | Path = "output/intermediate_02.pkl",
     labels_path: str | Path = "output/manual_labels.csv",
 ) -> Dataset:
-    """Read the stored feature blocks and pair them with the manual labels."""
+    """Read the stored feature blocks and pair them with the manual labels.
+
+    The blocks are stored as float32 (BERT's output dtype) and are widened to
+    float64 here on purpose: with a degenerate structural representation the
+    clustering is decided by rounding, and float32 arithmetic moves the
+    structure-only ARI by 0.3154 (see `precision_sensitivity`). Pinning the
+    working width makes every reported number reproducible; the narrow width
+    stays available as a diagnostic rather than as an accident.
+    """
     with open(pickle_path, "rb") as fh:
         data = pickle.load(fh)
     column_index: list[str] = data["column_index"]
     return Dataset(
-        e_text=data["e_text"],
-        e_type=data["e_type"],
-        e_rest=data["e_rest"],
-        e_stat=data["e_stat"],
+        e_text=np.asarray(data["e_text"], dtype=np.float64),
+        e_type=np.asarray(data["e_type"], dtype=np.float64),
+        e_rest=np.asarray(data["e_rest"], dtype=np.float64),
+        e_stat=np.asarray(data["e_stat"], dtype=np.float64),
         column_index=column_index,
         truth=load_manual_labels(labels_path, column_index),
     )
@@ -155,6 +163,73 @@ def block_variance_shares(dataset: Dataset, phi: np.ndarray) -> dict[str, float]
     return {k: v / total for k, v in variances.items()}
 
 
+# ── Diagnostics: is the representation able to say anything? ──────────
+
+
+def representation_degeneracy(
+    dataset: Dataset,
+    weights: dict[str, float],
+    normalize: str = "block",
+    decimals: int = 9,
+) -> dict[str, float | int]:
+    """How many of the columns does this representation actually tell apart?
+
+    A clustering can only separate points the features distinguish. If two
+    columns map to the same vector, no algorithm can ever assign them different
+    labels — they are one point wearing two names. Measured on the real corpus,
+    the structure-only configuration collapses 243 columns into 24 distinct
+    vectors (97% of rows are a duplicate of another), with one tie group of 108.
+    Its ARI is therefore a statement about 24 points, not 243.
+
+    Returns n_columns, n_distinct, duplicate_fraction and largest_tie_group.
+    """
+    from collections import Counter
+
+    phi = build_phi(dataset, weights, normalize=normalize)
+    groups = Counter(tuple(np.round(row, decimals)) for row in phi)
+    duplicated = sum(count for count in groups.values() if count > 1)
+    return {
+        "n_columns": len(phi),
+        "n_distinct": len(groups),
+        "duplicate_fraction": duplicated / len(phi) if len(phi) else 0.0,
+        "largest_tie_group": max(groups.values()) if groups else 0,
+    }
+
+
+def precision_sensitivity(
+    dataset: Dataset,
+    weights: dict[str, float],
+    normalize: str = "block",
+    **kwargs: object,
+) -> dict[str, float]:
+    """Score the same configuration in float32 and float64 arithmetic.
+
+    Tied points have no well-defined neighbourhood, so a representation full of
+    duplicates leaves the clustering to be decided by rounding. The gap between
+    the two precisions is how much of the score is arithmetic rather than
+    signal: on the real corpus, structure-only moves 0.1877 → 0.5031 (gap
+    0.3154) while any configuration with the embeddings on moves not at all.
+    """
+    scores = {}
+    for name, dtype in (("float32", np.float32), ("float64", np.float64)):
+        cast = Dataset(
+            e_text=dataset.e_text.astype(dtype),
+            e_type=dataset.e_type.astype(dtype),
+            e_rest=dataset.e_rest.astype(dtype),
+            e_stat=dataset.e_stat.astype(dtype),
+            column_index=dataset.column_index,
+            truth=dataset.truth,
+        )
+        phi = build_phi(cast, weights, normalize=normalize).astype(dtype)
+        scores[name] = _score_phi(phi, cast, **kwargs).ari
+
+    return {
+        "ari_float32": scores["float32"],
+        "ari_float64": scores["float64"],
+        "gap": abs(scores["float32"] - scores["float64"]),
+    }
+
+
 def run_clustering(
     dataset: Dataset,
     weights: dict[str, float],
@@ -166,10 +241,28 @@ def run_clustering(
     metric: str = "euclidean",
 ) -> np.ndarray:
     """Fuse the blocks, reduce, cluster. Returns raw cluster ids (-1 = noise)."""
+    return _cluster(
+        build_phi(dataset, weights, normalize=normalize),
+        n_components=n_components,
+        reducer=reducer,
+        min_cluster_size=min_cluster_size,
+        min_samples=min_samples,
+        metric=metric,
+    )
+
+
+def _cluster(
+    phi: np.ndarray,
+    n_components: int = PCA_COMPONENTS,
+    reducer: str = "pca",
+    min_cluster_size: int = HDBSCAN_MIN_CLUSTER_SIZE,
+    min_samples: int | None = HDBSCAN_MIN_SAMPLES,
+    metric: str = "euclidean",
+) -> np.ndarray:
+    """Reduce an already-fused matrix and cluster it."""
     from db_bad_clust.clustering.cluster_engine import ClusterEngine
     from db_bad_clust.clustering.dimensionality_reducer import DimensionalityReducer
 
-    phi = build_phi(dataset, weights, normalize=normalize)
     reduced = DimensionalityReducer(
         method=reducer,
         n_components=min(n_components, *phi.shape),
@@ -182,6 +275,28 @@ def run_clustering(
         min_samples=min_samples,
         metric=metric,
     ).fit_predict(reduced)
+
+
+def _score_phi(
+    phi: np.ndarray,
+    dataset: Dataset,
+    n_components: int = PCA_COMPONENTS,
+    reducer: str = "pca",
+    min_cluster_size: int = HDBSCAN_MIN_CLUSTER_SIZE,
+    min_samples: int | None = HDBSCAN_MIN_SAMPLES,
+    metric: str = "euclidean",
+) -> ClusterScore:
+    """Reduce, cluster and score an already-fused feature matrix."""
+    cluster_ids = _cluster(
+        phi,
+        n_components=n_components,
+        reducer=reducer,
+        min_cluster_size=min_cluster_size,
+        min_samples=min_samples,
+        metric=metric,
+    )
+    predicted = clusters_to_labels(cluster_ids, dataset.truth)
+    return score("phi", predicted, dataset.truth, group_ids=cluster_ids)
 
 
 def evaluate(
@@ -203,6 +318,43 @@ def evaluate(
         cluster_ids=[int(c) for c in cluster_ids],
         predicted=predicted,
     )
+
+
+def format_diagnostics(dataset: Dataset, configs: dict[str, dict[str, float]]) -> str:
+    """Report, per configuration, whether its score can mean anything.
+
+    Two questions, in order. How many columns does the representation tell
+    apart? And does the score survive a change of floating-point width? A
+    configuration that fails the first will usually fail the second, because
+    tied points leave the clustering to be settled by rounding.
+    """
+    lines = [
+        "Can this representation say anything?",
+        "-" * 76,
+        f"{'Configuration':<28} {'distinct':>12} {'duplicated':>11} {'largest tie':>12}",
+    ]
+    for name, weights in configs.items():
+        d = representation_degeneracy(dataset, weights)
+        lines.append(
+            f"{name:<28} {d['n_distinct']:>5}/{d['n_columns']:<6} "
+            f"{d['duplicate_fraction']:>10.0%} {d['largest_tie_group']:>12}"
+        )
+    lines += [
+        "",
+        f"{'Configuration':<28} {'ARI float32':>12} {'ARI float64':>12} {'gap':>12}",
+    ]
+    for name, weights in configs.items():
+        p = precision_sensitivity(dataset, weights)
+        lines.append(
+            f"{name:<28} {p['ari_float32']:>12.4f} {p['ari_float64']:>12.4f} {p['gap']:>12.4f}"
+        )
+    lines += [
+        "",
+        "Columns that share a vector cannot be given different labels by any",
+        "algorithm, and a gap between the two precisions is the part of the score",
+        "that is arithmetic rather than signal.",
+    ]
+    return "\n".join(lines)
 
 
 def format_table(rows: list[ClusterScore]) -> str:

@@ -104,9 +104,12 @@ class FeatureBuilder:
         no variance at all (every dimension constant) is returned untouched
         rather than divided by zero.
         """
-        total = float(matrix.var(axis=0).sum())
+        total = matrix.var(axis=0).sum()
         if total <= 0.0:
             return matrix
+        # Keep the block's own dtype: promoting float32 embeddings to float64
+        # here would silently double the memory and, worse, hide how much of a
+        # score depends on the arithmetic width (see `precision_sensitivity`).
         return matrix / np.sqrt(total)
 
     def _normalize(self, matrix: np.ndarray) -> np.ndarray:

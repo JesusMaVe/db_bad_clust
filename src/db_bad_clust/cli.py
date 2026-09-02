@@ -28,6 +28,7 @@ def _experiment(args: argparse.Namespace) -> int:
     from db_bad_clust.evaluation.experiments import (
         STRUCTURE_ONLY,
         evaluate,
+        format_diagnostics,
         format_table,
         load_dataset,
     )
@@ -35,8 +36,11 @@ def _experiment(args: argparse.Namespace) -> int:
     dataset = load_dataset(pickle_path=args.pickle, labels_path=args.labels)
     print(f"{dataset.n_columns} columns, {len(set(dataset.table_of))} tables\n")
 
-    run = evaluate("structure only (alpha=0)", dataset, STRUCTURE_ONLY)
+    name = "structure only (alpha=0)"
+    run = evaluate(name, dataset, STRUCTURE_ONLY)
     print(format_table([run.score]))
+    print()
+    print(format_diagnostics(dataset, {name: STRUCTURE_ONLY}))
 
     if args.baselines:
         from db_bad_clust.evaluation.ml_baselines import (

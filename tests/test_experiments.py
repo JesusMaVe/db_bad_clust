@@ -13,6 +13,8 @@ from db_bad_clust.evaluation.experiments import (
     build_phi,
     evaluate,
     format_table,
+    precision_sensitivity,
+    representation_degeneracy,
     run_clustering,
 )
 
@@ -167,6 +169,62 @@ class TestEvaluate:
         data = _dataset(40)
         result = evaluate("x", data, {"alpha": 1.0, "beta": 0.0, "gamma": 0.0, "delta": 0.0})
         assert len(result.cluster_ids) == 40
+
+
+class TestRepresentationDegeneracy:
+    """How many of the columns can the representation actually tell apart?"""
+
+    @staticmethod
+    def _tied() -> Dataset:
+        """A type block with two distinct rows and a text block with forty."""
+        rng = np.random.default_rng(11)
+        n, half = 40, 20
+        return Dataset(
+            e_text=rng.normal(0, 1, (n, 16)),
+            e_type=np.vstack([np.tile([1.0, 0.0], (half, 1)), np.tile([0.0, 1.0], (half, 1))]),
+            e_rest=np.ones((n, 3)),
+            e_stat=np.ones((n, 1)),
+            column_index=[f"T{i // half}.C{i}" for i in range(n)],
+            truth=["eav"] * half + ["clean"] * half,
+        )
+
+    def test_structure_only_collapses_the_corpus_to_its_distinct_types(self):
+        """alpha=0 leaves only the type block, which has two distinct rows."""
+        data = self._tied()
+        result = representation_degeneracy(
+            data, {"alpha": 0.0, "beta": 1.0, "gamma": 0.0, "delta": 0.0}
+        )
+        assert result["n_columns"] == 40
+        assert result["n_distinct"] == 2
+        assert result["largest_tie_group"] == 20
+        assert result["duplicate_fraction"] == pytest.approx(1.0)
+
+    def test_the_text_block_individuates_every_column(self):
+        data = self._tied()
+        result = representation_degeneracy(
+            data, {"alpha": 1.0, "beta": 0.0, "gamma": 0.0, "delta": 0.0}
+        )
+        assert result["n_distinct"] == 40
+        assert result["duplicate_fraction"] == pytest.approx(0.0)
+        assert result["largest_tie_group"] == 1
+
+
+class TestPrecisionSensitivity:
+    """A score that moves with the float width is not a measurement."""
+
+    def test_a_well_separated_dataset_agrees_across_precisions(self):
+        result = precision_sensitivity(
+            _dataset(40), {"alpha": 1.0, "beta": 0.0, "gamma": 0.0, "delta": 0.0}
+        )
+        assert result["ari_float32"] == pytest.approx(result["ari_float64"])
+        assert result["gap"] == pytest.approx(0.0)
+
+    def test_reports_both_precisions_and_their_gap(self):
+        result = precision_sensitivity(
+            _dataset(40), {"alpha": 1.0, "beta": 0.0, "gamma": 0.0, "delta": 0.0}
+        )
+        assert set(result) == {"ari_float32", "ari_float64", "gap"}
+        assert result["gap"] == pytest.approx(abs(result["ari_float32"] - result["ari_float64"]))
 
 
 class TestFormatTable:

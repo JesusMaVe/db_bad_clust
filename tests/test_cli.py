@@ -46,6 +46,16 @@ def fixture_paths(tmp_path):
     return str(pickle_path), str(labels_path)
 
 
+class TestLoadDataset:
+    def test_blocks_are_widened_to_float64(self, fixture_paths):
+        """The pickle stores float32; the working width is pinned deliberately."""
+        from db_bad_clust.evaluation.experiments import load_dataset
+
+        pickle_path, labels_path = fixture_paths
+        dataset = load_dataset(pickle_path, labels_path)
+        assert all(block.dtype == np.float64 for block in dataset.blocks)
+
+
 class TestParser:
     def test_requires_a_subcommand(self):
         with pytest.raises(SystemExit):
@@ -72,6 +82,8 @@ class TestExperiment:
         assert "40 columns, 2 tables" in out
         assert "structure only (alpha=0)" in out
         assert "upper bound" in out
+        assert "ARI float32" in out
+        assert "largest tie" in out
 
     def test_writes_per_column_verdicts_when_asked(self, fixture_paths, tmp_path, capsys):
         pickle_path, labels_path = fixture_paths

@@ -414,6 +414,14 @@ class TestBlockNormalization:
         phi = FeatureBuilder(normalize="block").build(e_text, e_type, e_rest, stat)
         assert phi.shape == (60, 109)
 
+    def test_block_mode_preserves_the_input_dtype(self) -> None:
+        """float32 in, float32 out — the width a score is computed at is a choice."""
+        e_text, e_type, e_rest = self._blocks()
+        phi = FeatureBuilder(normalize="block").build(
+            e_text.astype(np.float32), e_type.astype(np.float32), e_rest.astype(np.float32)
+        )
+        assert phi.dtype == np.float32
+
     def test_block_is_the_default(self) -> None:
         assert FeatureBuilder().normalize == "block"
 
