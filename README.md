@@ -4,13 +4,24 @@ Audita una base de datos Oracle y reporta problemas de diseño (tipos de dato eq
 palabras reservadas, EAV, llaves polimórficas, tablas gigantes, ...), con el SQL de corrección
 sugerido para cada uno.
 
+> **Estás en la rama `rule-engine`: el producto.** Contiene el motor de reglas, el comando
+> `audit`, el generador de SQL correctivo y los 472 tests. Es la rama estable y no cambia.
+>
+> La rama **`main`** es ahora otra cosa: la investigación con BERT, sin motor de reglas. Ahí se
+> corrigieron dos errores que afectan al veredicto que este README enlaza más abajo —
+> el peso α de la fusión nunca ponderó nada (con α nominal 0.15 los embeddings se quedaban el
+> 89% del espacio), y el baseline estructural colapsa 243 columnas en 24 vectores distintos,
+> con un ARI que va de 0.1877 a 0.5031 según se calcule en float32 o float64. La comparación
+> A vs B de este documento sigue siendo válida *para las configuraciones que probó*, pero la
+> conclusión "BERT es dañino" no se sostiene con la fusión corregida.
+
 El proyecto tiene **dos ramas** que hacen lo mismo por caminos distintos:
 
-- **Rama A — motor de reglas.** Heurísticas escritas a mano. Es la herramienta.
-- **Rama B — clustering ML.** BERT + features estructurales, agrupa sin etiquetas. Se midió,
-  perdió, y se conserva como evidencia documentada. No está en el camino del producto.
+- **`rule-engine` (esta) — motor de reglas.** Heurísticas escritas a mano. Es la herramienta.
+- **`main` — clustering con BERT.** Agrupa sin etiquetas. Es la investigación.
 
-El [veredicto medido](docs/veredicto_reglas_vs_ml.html) explica por qué, con ejemplos.
+El [veredicto medido](docs/veredicto_reglas_vs_ml.html) explica la comparación original, con
+ejemplos; léelo junto al aviso de arriba.
 
 ---
 
