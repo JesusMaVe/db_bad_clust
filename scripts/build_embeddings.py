@@ -47,6 +47,7 @@ def build(
     model_name: str,
     include_table_comment: bool = True,
     semantic: str = "documents",
+    mismatch: bool = False,
 ) -> dict[str, object]:
     """Documents → embeddings, plus the structural blocks, in one column order.
 
@@ -56,41 +57,62 @@ def build(
     dimensionally comparable to the structural block and readable per column.
     The anchors read the *name*, not the document — the document states the
     type, which would tell the encoder the answer it is being asked for.
+
+    `mismatch=True` (only meaningful with semantic="documents"; a no-op with
+    "anchors", which already carries the same scalar as its last dimension)
+    appends the type-mismatch scalar as a second column of e_stat.
+
+    Why it goes in e_stat and not as its own weighted block: the raw document
+    embedding states the type in words — "tipo texto de longitud variable" —
+    but a general-purpose sentence encoder does not reliably make the
+    discordance between a name and its type a salient axis on its own. A
+    supervised probe on the same features found exactly this: with the
+    document alone, 12 of 27 wrong_data_types columns are predicted `clean`
+    (F1-macro 0.4118); adding the mismatch scalar explicitly lifts that to
+    0.4255. `FeatureBuilder` already z-scores each dimension before scaling
+    the block, so a second column on a different natural scale (0-1 mismatch
+    against log-length) needs no new normalisation logic — this is exactly
+    the case `e_stat` (delta) was for.
     """
     preprocessor = TextPreprocessor.for_documents()
     documents, keys = preprocessor.build_documents(
         schema, include_table_comment=include_table_comment
     )
     columns = [col for table in schema.tables for col in table.columns]
+    names = [
+        preprocessor.process(col.name, table.name)
+        for table in schema.tables
+        for col in table.columns
+    ]
 
     from db_bad_clust.features.bert_embedder import BERTEmbedder
+    from db_bad_clust.features.semantic_anchors import SemanticAnchors
 
     embedder = BERTEmbedder(model_name=model_name)
 
     if semantic == "anchors":
-        from db_bad_clust.features.semantic_anchors import SemanticAnchors
-
-        names = [
-            preprocessor.process(col.name, table.name)
-            for table in schema.tables
-            for col in table.columns
-        ]
         e_text = SemanticAnchors(embedder).build_block(names, columns)
     else:
         e_text = embedder.encode(documents)
 
     encoder = StructuralEncoder()
     blocks = encoder.encode_all(columns)
+    e_stat = blocks["statistical"]
+
+    if mismatch and semantic != "anchors":
+        anchor_mismatch = SemanticAnchors(embedder).type_mismatch(names, columns)
+        e_stat = np.hstack([e_stat, anchor_mismatch])
 
     return {
         "e_text": e_text,
         "e_type": blocks["data_types"],
         "e_rest": blocks["constraints"],
-        "e_stat": blocks["statistical"],
+        "e_stat": e_stat,
         "column_index": keys,
         "documents": documents,
         "include_table_comment": include_table_comment,
         "semantic": semantic,
+        "mismatch": mismatch and semantic != "anchors",
         "schema": schema,
         "all_columns": columns,
         "table_names": [t.name for t in schema.tables],
@@ -112,6 +134,12 @@ def main() -> None:
         choices=("documents", "anchors"),
         default="documents",
         help="what goes in e_text: the raw document embedding, or the anchor block",
+    )
+    parser.add_argument(
+        "--mismatch",
+        action="store_true",
+        help="append the anchor type-mismatch scalar as a second e_stat column "
+        "(documents mode only — anchors mode already carries it)",
     )
     parser.add_argument(
         "--no-table-comment",
@@ -142,6 +170,7 @@ def main() -> None:
         args.model,
         include_table_comment=not args.no_table_comment,
         semantic=args.semantic,
+        mismatch=args.mismatch,
     )
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -150,7 +179,7 @@ def main() -> None:
 
     e_text = data["e_text"]
     print(f"Embedded {len(data['documents'])} documents with {args.model}")
-    print(f"e_text {np.shape(e_text)} → {output}")
+    print(f"e_text {np.shape(e_text)}, e_stat {np.shape(data['e_stat'])} → {output}")
 
 
 if __name__ == "__main__":

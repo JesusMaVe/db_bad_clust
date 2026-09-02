@@ -130,6 +130,25 @@ el 0.5031 de α=0 no es lo que parece.
   las 384 crudas como representación de agrupamiento. Se conservan por lo que sí hacen:
   explicar columna a columna.
 
+- **El escalar de discordancia como feature aparte da un resultado MIXTO, no una mejora limpia.**
+  Un sondeo supervisado (RF, mismas features, con el escalar reforzado x5 artificialmente) subía
+  el techo de F1-macro de 0.4118 a 0.4255 — la señal existe. Pero metido en el pipeline de
+  clustering real (`scripts/build_embeddings.py --mismatch`, que lo añade como segunda columna
+  de `e_stat`) y aislado con su propio peso honesto (δ=0.5, sin `data_length` compitiendo por el
+  mismo δ), sobre las 153 columnas sin gigantes:
+
+  | métrica | documento solo | documento + mismatch (δ=0.5) |
+  | ------- | --------------: | ----------------------------: |
+  | ARI     |          0.0802 |                        0.0758 |
+  | NMI/AMI |   0.3788/0.2553 |                 0.3709/0.2463 |
+  | F1-macro|          0.3781 |                         0.4137 |
+
+  F1-macro sube; ARI/NMI/AMI bajan un poco. F1 es cota superior por voto mayoritario; ARI/AMI
+  son las métricas honestas sobre la partición. La lectura correcta: el escalar ayuda a *nombrar*
+  el cluster que ya se formó (por eso sube F1), pero no cambia qué columnas quedan juntas (por
+  eso ARI/AMI no mejoran). `--mismatch` queda como flag opcional (por defecto `False`) en vez de
+  comportamiento por defecto, precisamente porque no es una mejora limpia.
+
 - **Nunca sobrescribas `output/intermediate_02.pkl`.** Es el baseline histórico; un experimento
   que sobrescribe su propio baseline no se puede comprobar.
 
