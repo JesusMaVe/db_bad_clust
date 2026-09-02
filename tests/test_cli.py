@@ -2,30 +2,48 @@
 
 from __future__ import annotations
 
-import json
-from unittest.mock import MagicMock, patch
+import csv
+import pickle
 
+import numpy as np
 import pytest
 
 from db_bad_clust.cli import build_parser, main
-from db_bad_clust.data.schema_extractor import ColumnMetadata, DatabaseSchema, TableMetadata
-from db_bad_clust.exceptions import BadDBError
 
 
-def _schema() -> DatabaseSchema:
-    return DatabaseSchema(
-        tables=[
-            TableMetadata(
-                name="VENTAS",
-                columns=[
-                    ColumnMetadata(name="ID", data_type="NUMBER", nullable=False),
-                    ColumnMetadata(
-                        name="FECHA", data_type="VARCHAR2", nullable=True, data_length=20
-                    ),
-                ],
-            )
-        ]
-    )
+@pytest.fixture
+def fixture_paths(tmp_path):
+    """A minimal pickle + label CSV pair, in the shape notebook 02 produces."""
+    n, half = 40, 20
+    rng = np.random.default_rng(0)
+    column_index = [f"T{i // half}.C{i}" for i in range(n)]
+    pickle_path = tmp_path / "intermediate.pkl"
+    with open(pickle_path, "wb") as fh:
+        pickle.dump(
+            {
+                "e_text": np.vstack(
+                    [rng.normal(0, 0.1, (half, 8)), rng.normal(5, 0.1, (half, 8))]
+                ),
+                "e_type": np.vstack(
+                    [np.tile([1, 0], (half, 1)), np.tile([0, 1], (half, 1))]
+                ).astype(float),
+                "e_rest": rng.normal(0, 1, (n, 3)),
+                "e_stat": rng.normal(0, 1, (n, 1)),
+                "phi": rng.normal(0, 1, (n, 12)),
+                "column_index": column_index,
+            },
+            fh,
+        )
+
+    labels_path = tmp_path / "labels.csv"
+    with open(labels_path, "w", newline="") as fh:
+        writer = csv.writer(fh)
+        writer.writerow(["table", "column", "data_type", "label"])
+        for i, key in enumerate(column_index):
+            table, column = key.split(".")
+            writer.writerow([table, column, "NUMBER", "eav" if i < half else "clean"])
+
+    return str(pickle_path), str(labels_path)
 
 
 class TestParser:
@@ -33,65 +51,43 @@ class TestParser:
         with pytest.raises(SystemExit):
             build_parser().parse_args([])
 
-    def test_audit_defaults_to_repo_config(self):
-        args = build_parser().parse_args(["audit"])
-        assert args.config == "config.yaml"
-        assert args.sql is None
-
-    def test_compare_defaults_need_no_database(self):
-        args = build_parser().parse_args(["compare"])
+    def test_experiment_defaults_need_no_database(self):
+        args = build_parser().parse_args(["experiment"])
         assert args.pickle == "output/intermediate_02.pkl"
         assert args.labels == "output/manual_labels.csv"
-        assert args.sweep is False
+        assert args.baselines is False
+
+    def test_audit_command_is_gone(self):
+        """The audit product lives on the rule-engine branch, not here."""
+        with pytest.raises(SystemExit):
+            build_parser().parse_args(["audit"])
 
 
-class TestAudit:
-    @patch("db_bad_clust.data.schema_extractor.SchemaExtractor")
-    @patch("db_bad_clust.data.db_connector.OracleConnector")
-    def test_reports_table_and_column_counts(self, connector, extractor, capsys):
-        extractor.return_value.extract_all.return_value = _schema()
-        assert main(["audit"]) == 0
-        assert "1 tables, 2 columns" in capsys.readouterr().out
+class TestExperiment:
+    def test_reports_the_corpus_size_and_a_score_table(self, fixture_paths, capsys):
+        pickle_path, labels_path = fixture_paths
+        code = main(["experiment", "--pickle", pickle_path, "--labels", labels_path, "--csv", ""])
+        out = capsys.readouterr().out
+        assert code == 0
+        assert "40 columns, 2 tables" in out
+        assert "structure only (alpha=0)" in out
+        assert "upper bound" in out
 
-    @patch("db_bad_clust.data.schema_extractor.SchemaExtractor")
-    @patch("db_bad_clust.data.db_connector.OracleConnector")
-    def test_writes_corrective_sql_when_asked(self, connector, extractor, tmp_path, capsys):
-        extractor.return_value.extract_all.return_value = _schema()
-        target = tmp_path / "nested" / "fix.sql"
-        assert main(["audit", "--sql", str(target)]) == 0
-        assert target.exists()
-        assert "db_bad_clust" in target.read_text()
+    def test_writes_per_column_verdicts_when_asked(self, fixture_paths, tmp_path, capsys):
+        pickle_path, labels_path = fixture_paths
+        target = tmp_path / "nested" / "per_column.csv"
+        code = main(
+            ["experiment", "--pickle", pickle_path, "--labels", labels_path, "--csv", str(target)]
+        )
+        assert code == 0
+        rows = list(csv.DictReader(open(target)))
+        assert len(rows) == 40
+        assert set(rows[0]) == {"column", "truth", "cluster_id", "predicted"}
         assert str(target) in capsys.readouterr().out
-
-    @patch("db_bad_clust.data.schema_extractor.SchemaExtractor")
-    @patch("db_bad_clust.data.db_connector.OracleConnector")
-    def test_writes_json_findings_when_asked(self, connector, extractor, tmp_path):
-        extractor.return_value.extract_all.return_value = _schema()
-        target = tmp_path / "audit.json"
-        assert main(["audit", "--json", str(target)]) == 0
-        payload = json.loads(target.read_text())
-        assert payload["tables"] == 1
-        assert payload["columns"] == 2
-        assert "column_issues" in payload["recommendations"]
-
-    @patch("db_bad_clust.data.schema_extractor.SchemaExtractor")
-    @patch("db_bad_clust.data.db_connector.OracleConnector")
-    def test_closes_the_connection_even_when_extraction_fails(self, connector, extractor):
-        instance = MagicMock()
-        connector.return_value = instance
-        extractor.return_value.extract_all.side_effect = BadDBError("boom")
-        assert main(["audit"]) == 1
-        instance.close.assert_called_once()
 
 
 class TestErrorHandling:
-    @patch("db_bad_clust.data.db_connector.OracleConnector")
-    def test_database_errors_exit_nonzero_with_a_message(self, connector, capsys):
-        connector.return_value.connect.side_effect = BadDBError("no listener")
-        assert main(["audit"]) == 1
-        assert "no listener" in capsys.readouterr().err
-
     def test_missing_input_file_reports_the_path(self, capsys):
-        code = main(["compare", "--pickle", "does/not/exist.pkl"])
+        code = main(["experiment", "--pickle", "does/not/exist.pkl"])
         assert code == 1
         assert "does/not/exist.pkl" in capsys.readouterr().err

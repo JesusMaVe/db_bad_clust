@@ -1,24 +1,23 @@
 """
-ml_baselines.py — The ML approaches that were tried and lost, kept runnable.
+ml_baselines.py — The baselines the semantic pipeline has to beat.
 
-The project made several serious attempts at beating the rule engine with
-machine learning. Each one is cited in `docs/veredicto_reglas_vs_ml.html` as a
-measured negative result, and a number nobody can re-run is an assertion, not
-evidence. These lived only in notebooks 03/04 until those were deleted.
+Two reference points, both scored against the same manual ground truth in
+`output/manual_labels.csv` so every figure sits on one scale:
 
-Two baselines:
+  random_forest_baseline()          supervised ceiling: how much of the label
+                                    can a classifier extract from the composite
+                                    vector at all? A clustering that lands far
+                                    below this is limited by the clustering, not
+                                    by the features.
+  clustering_algorithm_comparison()  algorithm control: is the density-based
+                                    choice actually doing the work, or would
+                                    K-Means on the same vector do as well?
 
-  random_forest_baseline()          supervised: can a classifier learn the
-                                    labels from the composite vector?
-  clustering_algorithm_comparison()  unsupervised: does the density-based
-                                    algorithm really beat K-Means and MeanShift,
-                                    as the original hypothesis claimed?
-
-Both score against the same manual ground truth `head_to_head` uses, so the
-figures sit on the same scale as the rule engine's.
+Neither is the contribution — they are the floor. A claim that the semantic
+component helps means beating these, not beating nothing.
 
 Usage:
-    db-bad-clust compare --baselines
+    db-bad-clust experiment --baselines
 """
 
 from __future__ import annotations
@@ -29,15 +28,15 @@ from typing import Any
 
 import numpy as np
 
-# The composite-vector weights the clustering branch was tuned to. alpha=0
-# means the BERT embeddings are switched off — its own measured optimum.
+# The structure-only configuration: alpha=0 switches the embeddings off, so
+# this is the baseline the semantic component is measured against.
 CLUSTERING_WEIGHTS = {"alpha": 0.00, "beta": 0.35, "gamma": 0.45, "delta": 0.20}
 PCA_COMPONENTS = 20
 CV_FOLDS = 5
 
 
 def _load(pickle_path: str | Path, labels_path: str | Path) -> tuple[dict[str, Any], list[str]]:
-    from db_bad_clust.evaluation.head_to_head import load_manual_labels
+    from db_bad_clust.evaluation.cluster_scoring import load_manual_labels
 
     with open(pickle_path, "rb") as fh:
         data = pickle.load(fh)
@@ -183,8 +182,8 @@ def format_baselines(rf: dict[str, Any], clustering: list[dict[str, Any]]) -> st
             f"{row['n_clusters']:>10}{row['noise']:>8}"
         )
     add("")
-    add("  Scored against the manual labels, not the circular rule-engine ground truth,")
-    add("  so these do not reproduce the Phase-3 table in docs/00_PROJECT_STATUS_REPORT.md.")
+    add("  Scored against the 243 manual labels. These are reference points, not")
+    add("  results: the semantic pipeline has to clear them to have said anything.")
     return "\n".join(lines)
 
 

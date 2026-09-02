@@ -1,5 +1,5 @@
 """
-conftest.py — Shared pytest fixtures (schema/column fixtures for rule engine + clustering).
+conftest.py — Shared pytest fixtures (schema/column fixtures for the clustering pipeline).
 """
 
 import numpy as np

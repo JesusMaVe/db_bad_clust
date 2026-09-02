@@ -1,4 +1,4 @@
-"""Tests for the losing-ML baselines. No DB and no pickle required."""
+"""Tests for the reference baselines. No DB and no pickle required."""
 
 from __future__ import annotations
 
@@ -99,7 +99,7 @@ class TestClusteringComparison:
 
 
 class TestFormatting:
-    def test_report_names_both_baselines_and_the_ground_truth_caveat(self, fixture_paths):
+    def test_report_names_both_baselines_and_says_they_are_only_the_floor(self, fixture_paths):
         pkl, labels = fixture_paths
         text = format_baselines(
             random_forest_baseline(pickle_path=pkl, labels_path=labels, folds=2),
@@ -109,4 +109,5 @@ class TestFormatting:
         )
         assert "Random Forest" in text
         assert "kmeans" in text
-        assert "circular" in text
+        assert "manual labels" in text
+        assert "reference points" in text

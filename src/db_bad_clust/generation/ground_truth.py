@@ -1,19 +1,21 @@
 """
-ground_truth.py — Anti-pattern ground truth for H1 validation
+ground_truth.py — The manual ground truth for the clustering evaluation.
 
-Purpose:
-  Map each column from the anti-pattern tables to its primary
-  anti-pattern category at COLUMN level.
+The 243 columns of the Oracle instance were labelled by hand, one anti-pattern
+per column, into `output/manual_labels.csv`. That file is the only ground truth
+this branch recognises.
 
-  The labels are produced by the same rule engine used for detection
-  (rule_engine.classify) applied to the catalog tables converted to
-  DatabaseSchema, so ground truth and detection share label semantics.
+An earlier version of this module *derived* the ground truth by running the rule
+engine over the schema. That made "accuracy" circular — the detector was scored
+against its own output — and it is gone along with the rule engine (see the
+`rule-engine` branch). What remains is the loader and the vocabulary a label is
+allowed to take.
 
 Usage:
-  from db_bad_clust.generation.ground_truth import get_ground_truth, build_ground_truth_map
+    from db_bad_clust.generation.ground_truth import load_manual_ground_truth
 
-  gt_map = build_ground_truth_map()
-  truth_labels = get_ground_truth(column_table_map, column_names, gt_map)
+    gt = load_manual_ground_truth("output/manual_labels.csv")
+    gt["EMPLEADOS.FECHA_INGRESO"]  # → "wrong_data_types"
 """
 
 from __future__ import annotations
@@ -21,24 +23,7 @@ from __future__ import annotations
 import csv
 from pathlib import Path
 
-from db_bad_clust.generation.anti_patterns import AntiPatternTable, generate_poorly_designed_tables
-
 LABEL_CLEAN = "clean"
-LABEL_UNKNOWN = None
-
-# Rule-engine labels -> manual vocabulary (identity for labels that already match).
-RULE_TO_MANUAL = {
-    "date_as_text": "wrong_data_types",
-    "number_as_text": "wrong_data_types",
-    "bad_boolean": "self_contradictory",
-    "reserved_word": "reserved_words",
-    "impossible_data": "impossible_data",
-    "self_referencing": "self_referencing",
-    "polymorphic": "polymorphic",
-    "giant_table": "giant_table",
-    "eav_pattern": "eav",
-    "inconsistent_naming": "inconsistent_naming",
-}
 
 MANUAL_LABEL_VOCABULARY = {
     "clean",
@@ -55,10 +40,11 @@ MANUAL_LABEL_VOCABULARY = {
 
 
 def load_manual_ground_truth(path: str | Path) -> dict[str, str]:
-    """Load manually labeled ground truth from a CSV (see label_export.py).
+    """Load the hand-labelled ground truth from a CSV (see label_export.py).
 
-    CSV columns: table,column,data_type,label. Labels must be in
-    MANUAL_LABEL_VOCABULARY and every row must be filled.
+    CSV columns: table,column,data_type,label. Every row must be filled and
+    every label must be in MANUAL_LABEL_VOCABULARY — a blank or misspelled
+    label would silently become a class of its own and distort every metric.
 
     Returns:
         Dict keyed by "TABLE_NAME.COLUMN_NAME" with the label.
@@ -70,69 +56,11 @@ def load_manual_ground_truth(path: str | Path) -> dict[str, str]:
             if not label:
                 raise ValueError(f"Empty label at CSV row {i}: {row['table']}.{row['column']}")
             if label not in MANUAL_LABEL_VOCABULARY:
-                raise ValueError(f"Invalid label '{label}' at CSV row {i} (allowed: {sorted(MANUAL_LABEL_VOCABULARY)})")
+                raise ValueError(
+                    f"Invalid label '{label}' at CSV row {i} "
+                    f"(allowed: {sorted(MANUAL_LABEL_VOCABULARY)})"
+                )
             gt[f"{row['table']}.{row['column']}".upper()] = label
     if not gt:
         raise ValueError(f"No rows in {path}")
     return gt
-
-
-def build_ground_truth_map() -> dict[str, str]:
-    """Build a mapping from TABLE.COLUMN to anti-pattern label at COLUMN level.
-
-    The labels are produced by running rule_engine.classify on the catalog
-    tables converted to DatabaseSchema, keeping ground truth aligned with the
-    detector's label semantics.
-
-    Returns:
-        Dict keyed by "TABLE_NAME.COLUMN_NAME" with anti-pattern label.
-    """
-    from db_bad_clust.generation.schema_adapter import to_database_schema
-    from db_bad_clust.rules.rule_engine import classify as classify_schema
-
-    tables: list[AntiPatternTable] = generate_poorly_designed_tables()
-    schema = to_database_schema(tables)
-    results = classify_schema(schema=schema)
-
-    gt: dict[str, str] = {}
-    for r in results:
-        key = f"{r.table_name}.{r.column_name}".upper()
-        gt[key] = r.predicted_label
-
-    # Every catalog column must have an entry.
-    for table in tables:
-        for col_name in table.columns:
-            key = f"{table.name}.{col_name}".upper()
-            gt.setdefault(key, LABEL_CLEAN)
-
-    return gt
-
-
-def get_ground_truth(
-    column_table_map: list[str],
-    column_names: list[str] | None = None,
-    gt_map: dict[str, str] | None = None,
-) -> list[str | None]:
-    """Build ground truth label list matching the pipeline's column order.
-
-    Args:
-        column_table_map: List of table names per column (index-parallel).
-        column_names: Optional list of "TABLE.COLUMN" names. If provided,
-            these are used for lookup directly.
-        gt_map: Pre-built ground truth map (built once and cached).
-
-    Returns:
-        List of ground truth labels (str) or None for unknown columns.
-    """
-    if gt_map is None:
-        gt_map = build_ground_truth_map()
-
-    truth: list[str | None] = []
-    if column_names:
-        for name in column_names:
-            truth.append(gt_map.get(name.upper(), LABEL_UNKNOWN))
-    else:
-        for i, table_name in enumerate(column_table_map):
-            truth.append(LABEL_UNKNOWN)
-
-    return truth
