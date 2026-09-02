@@ -9,11 +9,6 @@ Verifies:
   - String representation includes the message
 """
 
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
-
 import pytest
 
 from db_bad_clust.exceptions import (
@@ -23,12 +18,18 @@ from db_bad_clust.exceptions import (
     ConnectionError,
     DatabaseError,
     EmbeddingError,
-    EvaluationError,
-    GenerationError,
-    QueryError,
     SchemaError,
-    VisualizationError,
 )
+
+ALL_EXCEPTIONS = [
+    BadDBError,
+    DatabaseError,
+    ConnectionError,
+    SchemaError,
+    EmbeddingError,
+    ClusteringError,
+    ConfigError,
+]
 
 # ── All exceptions can be instantiated ─────────────────────────────────
 
@@ -36,22 +37,7 @@ from db_bad_clust.exceptions import (
 class TestInstantiation:
     """Each exception class can be created with and without a message."""
 
-    @pytest.mark.parametrize(
-        "exc_class",
-        [
-            BadDBError,
-            DatabaseError,
-            ConnectionError,
-            QueryError,
-            SchemaError,
-            EmbeddingError,
-            ClusteringError,
-            EvaluationError,
-            ConfigError,
-            GenerationError,
-            VisualizationError,
-        ],
-    )
+    @pytest.mark.parametrize("exc_class", ALL_EXCEPTIONS)
     def test_default_construction(self, exc_class: type) -> None:
         """Exception can be raised with no arguments."""
         instance = exc_class()
@@ -63,14 +49,10 @@ class TestInstantiation:
             (BadDBError, "generic error"),
             (DatabaseError, "db failure"),
             (ConnectionError, "cannot connect"),
-            (QueryError, "bad SQL"),
             (SchemaError, "missing table"),
             (EmbeddingError, "model failed"),
             (ClusteringError, "no convergence"),
-            (EvaluationError, "bad metric"),
             (ConfigError, "YAML parse error"),
-            (GenerationError, "DDL generation failed"),
-            (VisualizationError, "plot error"),
         ],
     )
     def test_with_message(self, exc_class: type, message: str) -> None:
@@ -87,32 +69,16 @@ class TestHierarchy:
 
     def test_bad_db_error_is_base(self) -> None:
         """Every custom exception should be an instance of BadDBError."""
-        for exc in [
-            BadDBError(),
-            DatabaseError(),
-            ConnectionError(),
-            QueryError(),
-            SchemaError(),
-            EmbeddingError(),
-            ClusteringError(),
-            EvaluationError(),
-            ConfigError(),
-            GenerationError(),
-            VisualizationError(),
-        ]:
-            assert isinstance(exc, BadDBError), f"{type(exc).__name__} not a BadDBError"
+        for exc_class in ALL_EXCEPTIONS:
+            assert isinstance(exc_class(), BadDBError), f"{exc_class.__name__} not a BadDBError"
 
-    def test_database_hierarchy(self) -> None:
-        """DatabaseError ← ConnectionError, QueryError."""
+    def test_connection_error_is_a_database_error(self) -> None:
         assert isinstance(ConnectionError(), DatabaseError)
-        assert isinstance(QueryError(), DatabaseError)
         assert issubclass(ConnectionError, DatabaseError)
-        assert issubclass(QueryError, DatabaseError)
 
     def test_concrete_is_not_parent(self) -> None:
         """Child exceptions are not instances of unrelated siblings."""
         conn_err = ConnectionError()
-        assert not isinstance(conn_err, QueryError)
         assert not isinstance(conn_err, SchemaError)
         assert not isinstance(conn_err, EmbeddingError)
 
@@ -130,11 +96,6 @@ class TestHierarchy:
         """ClusteringError is a BadDBError but not a DatabaseError."""
         assert isinstance(ClusteringError(), BadDBError)
         assert not isinstance(ClusteringError(), DatabaseError)
-
-    def test_evaluation_is_separate_branch(self) -> None:
-        """EvaluationError is a BadDBError but not a ClusteringError."""
-        assert isinstance(EvaluationError(), BadDBError)
-        assert not isinstance(EvaluationError(), ClusteringError)
 
 
 # ── Cause chaining ──────────────────────────────────────────────────────
@@ -176,22 +137,7 @@ class TestCauseChaining:
         exc = ConnectionError("connection refused", cause=inner)
         assert exc.cause is inner
 
-    @pytest.mark.parametrize(
-        "exc_class",
-        [
-            BadDBError,
-            DatabaseError,
-            ConnectionError,
-            QueryError,
-            SchemaError,
-            EmbeddingError,
-            ClusteringError,
-            EvaluationError,
-            ConfigError,
-            GenerationError,
-            VisualizationError,
-        ],
-    )
+    @pytest.mark.parametrize("exc_class", ALL_EXCEPTIONS)
     def test_all_exceptions_accept_cause(self, exc_class: type) -> None:
         """Every exception class accepts the optional cause argument."""
         cause = KeyError("missing key")

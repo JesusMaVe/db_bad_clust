@@ -75,7 +75,7 @@ Reconstruir los embeddings desde Oracle:
 ```
 
 ```bash
-.venv/bin/python -m pytest tests/ -v       # 416 tests, sin BD ni descarga del modelo
+.venv/bin/python -m pytest tests/ -v       # 372 tests, sin BD ni descarga del modelo
 ```
 
 `AGENTS.md` tiene el detalle completo: invariantes, ablaciones y limitaciones medidas.

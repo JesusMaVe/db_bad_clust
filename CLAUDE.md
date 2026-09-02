@@ -42,8 +42,8 @@ entrypoint shebangs are stale.
 ```
 
 ```bash
-.venv/bin/python -m pytest tests/ -v      # 416 tests, no DB required
-.venv/bin/python -m ruff check src tests scripts   # 2 pre-existing errors; new code lint-clean
+.venv/bin/python -m pytest tests/ -v      # 372 tests, no DB required
+.venv/bin/python -m ruff check src tests scripts   # lint-clean
 ```
 
 `pyproject.toml` sets `pythonpath = ["src"]` for pytest. Notebooks and `scripts/` do their own
@@ -60,9 +60,9 @@ src/db_bad_clust/
 │                  bert_embedder, semantic_anchors, feature_builder
 ├── clustering/    dimensionality_reducer, cluster_engine
 ├── evaluation/    cluster_scoring (both rulers), experiments (sweeps, ablations,
-│                  diagnostics), metrics, validation, anomaly, ml_baselines
-└── generation/    anti_patterns (schema catalog), schema_adapter, ground_truth
-                   (loads + validates the manual labels), label_export
+│                  diagnostics), validation (ARI/NMI), ml_baselines
+└── generation/    anti_patterns (table/column comments), ground_truth (loads +
+                   validates the manual labels), label_export
 scripts/           apply_comments.py, build_embeddings.py
 notebooks/         01, 02 — the original pipeline; keep them, they produce
                    output/intermediate_02.pkl, the historical baseline artifact
@@ -120,10 +120,13 @@ chance. The difference was never BERT; it was the input.
 - **Never overwrite `output/intermediate_02.pkl`.** It is the historical baseline; an
   experiment that overwrites its own baseline cannot be checked.
 
+- **The `--mismatch` scalar is a mixed result, not a clean win** — it lifts F1-macro
+  (majority-vote naming can use it to name a cluster better) but slightly lowers ARI/AMI (it
+  does not change which columns end up together). Keep it opt-in.
+
 ## Gotchas
 
 - Table names are case-sensitive in Oracle — always double-quote.
 - Oracle allows only one LONG column per table (ORA-01754); the catalog uses CLOB/BLOB.
-- `config.yaml` says `tables_count: 10`; the real count is 23 — the value is unused.
 - `apply_comments.py` applies 77 comments (23 tables, 54 columns). Before it ran, all 243
   columns had `comments = None` and the encoder had no natural-language input at all.

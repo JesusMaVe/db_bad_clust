@@ -99,14 +99,10 @@ def clustering_algorithm_comparison(
     labels_path: str | Path = "output/manual_labels.csv",
     methods: tuple[str, ...] = ("kmeans", "dbscan", "agglomerative", "meanshift", "hdbscan"),
 ) -> list[dict[str, Any]]:
-    """Test the original hypothesis: does density-based clustering win?
+    """Is the density-based algorithm doing the work, or would K-Means do as well?
 
     All algorithms run on the same PCA-reduced composite vector and are scored
     against the same manual labels, so the comparison is internally consistent.
-
-    These are NOT the Phase-3 figures in docs/00_PROJECT_STATUS_REPORT.md —
-    those used UMAP and the circular rule-engine ground truth. Same question,
-    honest labels; don't quote the two side by side as if they were one series.
     """
     from sklearn.decomposition import PCA
 

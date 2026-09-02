@@ -184,16 +184,7 @@ class TestZScoreNormalization:
 class TestWeightApplication:
     """Verify weights are correctly applied."""
 
-    def test_default_weights(
-        self,
-        builder: FeatureBuilder,
-        small_embeddings: np.ndarray,
-        small_type_encoding: np.ndarray,
-        small_constraint_encoding: np.ndarray,
-    ) -> None:
-        """Default weights produce phi with expected magnitude ranges."""
-        phi = builder.build(small_embeddings, small_type_encoding, small_constraint_encoding)
-        # After z-score + weight: each component should reflect its weight
+    def test_default_weights(self, builder: FeatureBuilder) -> None:
         assert builder.weights == {"alpha": 0.40, "beta": 0.30, "gamma": 0.25, "delta": 0.05}
 
     def test_alpha_zero(

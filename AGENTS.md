@@ -155,9 +155,8 @@ el 0.5031 de α=0 no es lo que parece.
 ## Tests y lint
 
 ```bash
-.venv/bin/python -m pytest tests/ -v      # 416 tests, sin BD y sin descargar el modelo
-.venv/bin/python -m ruff check src tests scripts   # 2 errores preexistentes (anomaly.py E741,
-                                                   # test_feature_builder.py F841)
+.venv/bin/python -m pytest tests/ -v      # 372 tests, sin BD y sin descargar el modelo
+.venv/bin/python -m ruff check src tests scripts   # lint-clean
 ```
 
 Los tests de `semantic_anchors` inyectan un embedder de prueba que coloca cada texto en un eje
@@ -166,15 +165,16 @@ unitario, así que los cosenos esperados son literales y no un recálculo de lo 
 ## Oracle — no es reproducible al 100% desde el repo
 
 - Las 23 tablas se crearon ad-hoc; no hay generador de DDL del esquema real.
-- `generation/anti_patterns.py` es un catálogo de solo datos (sin `__main__`): importarlo da el
-  esquema esperado; ejecutarlo no hace nada.
-- Si la BD y el catálogo divergen, las métricas cambian en silencio.
+- `generation/anti_patterns.py` solo guarda `TABLE_COMMENTS`/`COLUMN_COMMENTS`, aplicados a
+  Oracle vía `scripts/apply_comments.py`. La generación del esquema en sí no está en este repo.
 - Nombres de tabla sensibles a mayúsculas — siempre entre comillas dobles.
 - Oracle permite una sola columna LONG por tabla (ORA-01754).
-- `config.yaml` dice `tables_count: 10`; el real es 23 — el valor no se usa.
 
 ## Referencia
 
-- `docs/00_PROJECT_STATUS_REPORT.md`, `docs/research_extraction_preprocessing.md` — histórico.
-- `docs/veredicto_reglas_vs_ml.html` está en la rama `rule-engine`, no aquí: su conclusión
-  ("BERT es dañino") es justo el artefacto que el invariante 1 explica.
+- `docs/research_extraction_preprocessing.md` — investigación de fuentes primarias sobre
+  extracción de metadata Oracle y preprocesamiento de texto para embeddings.
+- Los reportes sobre el motor de reglas (`00_PROJECT_STATUS_REPORT.md`,
+  `rule_engine_and_future_ml_report.{md,html}`, `veredicto_reglas_vs_ml.html`) viven en la
+  rama `rule-engine`, no aquí. `veredicto_reglas_vs_ml.html` concluía "BERT es dañino" — es
+  justo el artefacto que el invariante 1 de esta rama explica.

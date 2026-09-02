@@ -26,10 +26,6 @@ class ConnectionError(DatabaseError):
     """Database connection failure (wrong credentials, timeout, etc.)."""
 
 
-class QueryError(DatabaseError):
-    """SQL query execution failure."""
-
-
 # ── Schema ────────────────────────────────────────────────────────────
 
 
@@ -51,29 +47,8 @@ class ClusteringError(BadDBError):
     """Dimensionality reduction or clustering error."""
 
 
-# ── Evaluation ────────────────────────────────────────────────────────
-
-
-class EvaluationError(BadDBError):
-    """Metrics evaluation error."""
-
-
 # ── Configuration ─────────────────────────────────────────────────────
 
 
 class ConfigError(BadDBError):
     """Configuration / YAML loading error."""
-
-
-# ── DDL / DML generation ──────────────────────────────────────────────
-
-
-class GenerationError(BadDBError):
-    """DDL or DML generation error."""
-
-
-# ── Visualization ─────────────────────────────────────────────────────
-
-
-class VisualizationError(BadDBError):
-    """Plot / chart generation error."""
