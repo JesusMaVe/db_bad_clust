@@ -5,22 +5,16 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "db-bad-clust"
 version = "0.1.0"
-description = "Detects anti-patterns in Oracle schemas via a rule engine + ML clustering."
+description = "Unsupervised detection of Oracle schema anti-patterns with sentence embeddings."
 requires-python = ">=3.10"
-# The audit path (extract → rule engine → recommendations → corrective SQL)
-# needs only a driver and a config parser. Everything ML lives in [research],
-# so installing the tool does not pull ~2GB of torch for a branch the tool
-# does not use — see docs/rule_engine_and_future_ml_report.md.
+# This branch IS the ML pipeline, so its dependencies are the base ones. The
+# split that kept torch out of a base install belongs to the `rule-engine`
+# branch, where a dependency-free audit path was the point; here there is no
+# such path to protect. oracledb and pyyaml stay because notebook 01 and
+# scripts/build_embeddings.py extract live metadata from Oracle.
 dependencies = [
     "oracledb>=2.0.0",
     "pyyaml>=6.0",
-]
-
-[project.scripts]
-db-bad-clust = "db_bad_clust.cli:main"
-
-[project.optional-dependencies]
-research = [
     "numpy>=1.24.0",
     "pandas>=2.0.0",
     "scikit-learn>=1.3.0",
@@ -31,8 +25,12 @@ research = [
     "matplotlib>=3.7.0",
     "seaborn>=0.12.0",
 ]
+
+[project.scripts]
+db-bad-clust = "db_bad_clust.cli:main"
+
+[project.optional-dependencies]
 dev = [
-    "db-bad-clust[research]",
     "pytest>=8.0.0",
     "pytest-mock>=3.12.0",
     "ruff>=0.3.0",

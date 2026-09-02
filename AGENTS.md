@@ -1,188 +1,161 @@
-# AGENTS.md — db_bad_clust (ml_bad_db_trainer)
+# AGENTS.md — db_bad_clust (rama de investigación)
 
-**Status: Phase 1-3 (COMPLETE) → Notebooks (COMPLETE) → Packaging (COMPLETE) → Audit tool (CURRENT)**
-
-The project's goal is now an **Oracle-only schema audit tool**, not hypothesis validation. H₁
-is settled and refuted (see "A vs B" below); the ML branch is frozen as documented evidence,
-not deleted. Explicitly out of scope, by the owner's decision: multi-SGBD, REST API,
-containerization, web dashboard.
+**`main` es la rama de investigación: detección no supervisada de anti-patrones de esquema
+Oracle con embeddings de oraciones. BERT es el método.** El motor de reglas y el producto de
+auditoría viven en la rama `rule-engine` (congelada en `b676caf`, en `origin`) y no deben
+volver aquí.
 
 ## Setup
 
 ```bash
 docker compose up -d                         # Oracle 23c, healthcheck ~30s
-.venv/bin/python -m pip install -e ".[dev]"  # installs db_bad_clust + runtime/dev deps from pyproject
+.venv/bin/python -m pip install -e ".[dev]"
 ```
 
-Base deps are `oracledb` + `pyyaml` only; all ML (torch, transformers, umap-learn, hdbscan,
-sklearn, numpy) is in the `research` extra, which `[dev]` pulls. The audit path imports none
-of it — keep it that way.
+Todas las dependencias ML son de base en esta rama: el reparto base/[research] existía para
+proteger un camino de auditoría sin ML, y ese camino está en `rule-engine`. `oracledb` y
+`pyyaml` siguen porque el notebook 01 y `scripts/build_embeddings.py` extraen de Oracle.
 
-## The audit tool (CLI)
+Usa `.venv/bin/python -m <cmd>` — los shebangs del venv están obsoletos (la carpeta se renombró).
+
+## El experimento
 
 ```bash
-.venv/bin/python -m db_bad_clust.cli audit --sql output/fix.sql --json output/audit.json
-.venv/bin/python -m db_bad_clust.cli compare --sweep     # A vs B, needs no database
+# Todo se puntúa contra output/manual_labels.csv (243 columnas etiquetadas a mano)
+.venv/bin/python -m db_bad_clust.cli experiment --sweep
+.venv/bin/python -m db_bad_clust.cli experiment --without-giants \
+    --ablation output/intermediate_02.pkl output/intermediate_docs.pkl output/intermediate_anchors.pkl
 ```
-
-`audit` chains extractor → rule_engine → recommender → ddl_generator. Verified against the
-live container: 23 tables / 243 columns, 541 lines of remediation SQL. Before the CLI existed
-`ddl_generator` had no caller at all.
-
-Use `.venv/bin/python -m <cmd>` — venv shebangs are stale (folder was renamed), entrypoints like
-`jupyter`/`pip`/`nbconvert` fail.
-
-## Oracle DB — NOT fully reproducible from the repo
-
-- The 23 tables were created ad-hoc; there is no DDL generator for the *real* DB in the repo
-  (`db_bad_clust.generation.ddl_generator` emits fix scripts for detections, not the original schema).
-- `db_bad_clust.generation.anti_patterns` is a **data-only catalog** (no `__main__`) — importing it
-  gives the expected schema; running it does nothing.
-- The DB is expected to match the catalog. If they drift (e.g. a catalog table missing in Oracle),
-  metrics silently change — this happened with DATOS_MAESTROS (issue #2).
-- The only runnable DB step is the documentation overlay:
 
 ```bash
-.venv/bin/python scripts/apply_comments.py   # applies TABLE_COMMENTS/COLUMN_COMMENTS to Oracle
+# Reconstruir los bloques desde Oracle (contenedor arriba)
+.venv/bin/python scripts/apply_comments.py                     # una vez
+.venv/bin/python scripts/build_embeddings.py --dry-run         # ver los documentos
+.venv/bin/python scripts/build_embeddings.py --output output/intermediate_docs.pkl
+.venv/bin/python scripts/build_embeddings.py --semantic anchors --output output/intermediate_anchors.pkl
+.venv/bin/python scripts/build_embeddings.py --no-table-comment --output output/intermediate_docs_nocomment.pkl
 ```
 
-- It requires the Oracle container up (`docker compose up -d`, wait for healthy).
+Los artefactos: `intermediate_02.pkl` es el **baseline histórico** (embedding del nombre, sin
+tipo ni comentarios) y no se sobrescribe nunca. Los demás los produce el script.
 
-## ML Pipeline (Notebooks)
+## Los resultados
 
-Run in order; each saves a pickle to `output/` for the next:
+Todos contra las 243 etiquetas manuales. `--without-giants` excluye `TABLA_BASE_DATOS` (40) y
+`BACKUP_DATOS` (50), las dos únicas tablas que aportan la clase `giant_table`.
 
-1. `notebooks/01_data_preparation.ipynb` — extraction + preprocessing + structural encoding
-2. `notebooks/02_ml_embeddings.ipynb` — sentence embeddings + feature building + reduction
-Notebooks 03/04 were deleted (superseded by `audit` / `compare`; their Random Forest
-benchmark lives in `evaluation/ml_baselines.py`). **01 and 02 must stay** — they are the
-only producers of `output/intermediate_02.pkl`, which `compare` reads.
+### Corpus completo (243 columnas), α = 1.00
 
-**Manual ground truth (optional)**: `db_bad_clust.generation.label_export` dumps
-`output/manual_labels.csv` (empty `label` column) from Oracle; fill labels (vocabulary in
-`db_bad_clust.generation.ground_truth.MANUAL_LABEL_VOCABULARY`) and `compare` uses them
-instead of the rule-engine catalog, giving an honest, non-circular evaluation.
+| representación         |    ARI |    NMI |    AMI | Accuracy | F1-macro |  k |
+| ---------------------- | -----: | -----: | -----: | -------: | -------: | -: |
+| solo estructura (α=0)  | 0.5031 | 0.4245 | 0.3619 |   0.7119 |   0.2670 | 12 |
+| nombre (viejo, 384d)   | 0.3014 | 0.4512 | 0.3863 |   0.7037 |   0.2163 | 14 |
+| **documento (384d)**   | 0.3748 | 0.5484 | 0.4818 |   0.7984 |   0.4622 | 19 |
+| anclas (12d)           | 0.1428 | 0.3229 | 0.2819 |   0.5761 |   0.1598 |  6 |
 
-Headless (verified):
+### Sin las dos gigantes (153 columnas), α = 1.00 — la evaluación que vale
+
+| representación         |     ARI |    NMI |    AMI | Accuracy | F1-macro |  k |
+| ---------------------- | ------: | -----: | -----: | -------: | -------: | -: |
+| solo estructura (α=0)  |  0.0657 | 0.2432 | 0.1212 |   0.6078 |   0.2002 | 12 |
+| nombre (viejo, 384d)   | -0.0538 | 0.2043 | 0.0747 |   0.5425 |   0.1346 | 12 |
+| **documento (384d)**   |  0.0802 | 0.3788 | 0.2553 |   0.6797 |   0.3781 | 16 |
+| anclas (12d)           |  0.0369 | 0.0762 | 0.0297 |   0.5359 |   0.1097 |  3 |
+
+El documento gana las cinco métricas. El embedding del nombre da **ARI negativo**: peor que el
+azar.
+
+### Barrido de α con el documento (corpus completo, fusión corregida)
+
+| α    |    ARI |    NMI |    AMI | Accuracy | F1-macro |
+| ---- | -----: | -----: | -----: | -------: | -------: |
+| 0.00 | 0.5031 | 0.4245 | 0.3619 |   0.7119 |   0.2670 |
+| 0.25 | 0.3506 | 0.4862 | 0.4256 |   0.7284 |   0.2491 |
+| 0.50 | 0.3539 | 0.4934 | 0.4219 |   0.7366 |   0.3806 |
+| 0.75 | 0.3646 | 0.5238 | 0.4538 |   0.7737 |   0.4361 |
+| 1.00 | 0.3748 | 0.5484 | 0.4818 |   0.7984 |   0.4622 |
+
+AMI, accuracy y F1 crecen monótonamente con α. ARI no — ver el punto 2 de abajo sobre por qué
+el 0.5031 de α=0 no es lo que parece.
+
+## Invariantes críticos (aprendidos midiendo, no diseñando)
+
+- **α no ponderaba nada.** `_zscore` normaliza por dimensión, así que la varianza total de un
+  bloque es su número de dimensiones. Con α nominal 0.15 los embeddings se quedaban el **89%**
+  de la varianza; con 0.30, el **98%**. El `alpha_sweep` histórico ("ARI 0.5008 → 0.30 al
+  encender BERT") comparaba *sin embeddings* contra *embeddings y casi nada más*. Usa
+  `normalize="block"` (por defecto); `"zscore"` solo para reproducir lo viejo.
+
+- **El baseline estructural no individúa el corpus.** Con α=0, 243 columnas colapsan en **24
+  vectores distintos** (97% duplicadas, mayor empate de 108). Dos columnas con el mismo vector
+  no pueden recibir etiquetas distintas de ningún algoritmo. Su ARI tampoco es reproducible:
+  **0.1877 en float32 contra 0.5031 en float64**. `load_dataset` fija float64 a propósito;
+  `representation_degeneracy` y `precision_sensitivity` miden ambas cosas. El 0.5008 histórico
+  se reproduce exactamente en `zscore`/float32 — era el ancho en que se calculó.
+
+- **Lo que se le da a leer al encoder es el experimento entero.** `process()` devuelve
+  "empleados: fecha nacimiento", sin el tipo, así que ningún encoder puede distinguir
+  `FECHA_INGRESO DATE` de `FECHA_INGRESO VARCHAR2(20)` — que es exactamente
+  `wrong_data_types`. `build_document()` escribe tipo y restricciones en palabras.
+
+- **`build_document` escribe español: usa `TextPreprocessor.for_documents()`**, que aplica
+  `ABBREVIATIONS_ES`. El diccionario por defecto expande al inglés, correcto para `process()` y
+  equivocado dentro de una frase española; toca los dos tokens más frecuentes del esquema,
+  `col` (53 columnas) e `id` (24).
+
+- **Las anclas leen el *nombre*, nunca el documento** — el documento dice el tipo, que es la
+  respuesta que la feature de discordancia está tratando de dar.
+
+- **El mismatch de anclas es por compatibilidad, no por identidad.** La versión por identidad
+  marcaba `NOMBRE_CLIENTE VARCHAR2` (concepto "persona" ≠ "texto_libre") y no separaba nada:
+  `wrong_data_types` 0.3355 contra `clean` 0.2863. Con `CONCEPT_COMPATIBLE_CATEGORIES` los
+  casos reales suben con el concepto correcto (EMAIL DATE → contacto 0.540, PRECIO_TOTAL
+  VARCHAR2 → cantidad 0.305). Quedan 52 falsos positivos: `BACKUP_DATOS.COL_0xx`, de nombre
+  vacío, caen en el ancla "binario"; **pesar por confianza no lo arregla** — esos nombres
+  tienen mayor margen (0.1726) que los `wrong_data_types` (0.1204).
+
+- **Reporta AMI, no NMI, entre filas con distinto k.** Las configuraciones producen entre 2 y
+  19 clusters y NMI sube con k por sí solo.
+
+- **`giant_table` es propiedad de la tabla, no de la columna** — 90 de 243 columnas, todas de
+  `TABLA_BASE_DATOS` y `BACKUP_DATOS`. En el corpus completo, buena parte de la ganancia del
+  documento viene del comentario de tabla, que filtra identidad de tabla; sin él, α=1.00 cae a
+  ARI 0.2173 / F1 0.1664 (`--no-table-comment`). Por eso `--without-giants` es la evaluación
+  honesta.
+
+- **Accuracy y F1 de un clustering son cota superior** — el nombrado por voto mayoritario usa
+  la verdad de terreno que el pipeline nunca vio. Dilo donde los cites.
+
+- **Resultado negativo, conservado:** las anclas (12 dimensiones interpretables) pierden contra
+  las 384 crudas como representación de agrupamiento. Se conservan por lo que sí hacen:
+  explicar columna a columna.
+
+- **Nunca sobrescribas `output/intermediate_02.pkl`.** Es el baseline histórico; un experimento
+  que sobrescribe su propio baseline no se puede comprobar.
+
+## Tests y lint
 
 ```bash
-.venv/bin/python -m nbconvert --to notebook --execute --inplace notebooks/01_data_preparation.ipynb
+.venv/bin/python -m pytest tests/ -v      # 416 tests, sin BD y sin descargar el modelo
+.venv/bin/python -m ruff check src tests scripts   # 2 errores preexistentes (anomaly.py E741,
+                                                   # test_feature_builder.py F841)
 ```
 
-Notebooks import the installed package (`from db_bad_clust.data.schema_extractor import ...`) —
-no `sys.path` hacks. Notebook 01 needs Oracle up; 02 needs it only transitively (reads
-pickle). A re-run takes minutes with real BERT (`SKIP_BERT=False`).
+Los tests de `semantic_anchors` inyectan un embedder de prueba que coloca cada texto en un eje
+unitario, así que los cosenos esperados son literales y no un recálculo de lo que hace el código.
 
-## Package layout
+## Oracle — no es reproducible al 100% desde el repo
 
-```
-src/db_bad_clust/
-├── cli.py           audit (live Oracle) + compare (A vs B, no DB) — the product surface
-├── exceptions.py    BadDBError + subclasses shared across the package
-├── data/            db_connector, schema_extractor
-├── features/        text_preprocessor, structural_encoder, bert_embedder, feature_builder
-├── clustering/       dimensionality_reducer, cluster_engine
-├── rules/           rule_engine (detection + SQL_RESERVED_WORDS, _kw_match — the single home
-│                    for keyword logic), recommender, recommendation_reporter
-├── evaluation/       metrics (internal), validation (external, + cross_table_analysis /
-│                    cluster_composition salvaged from the deleted evaluator facade), anomaly,
-│                    head_to_head (A vs B, both rulers, no DB)
-└── generation/       anti_patterns (catalog), schema_adapter (catalog -> DatabaseSchema),
-                     ddl_generator, ground_truth (also owns RULE_TO_MANUAL +
-                     MANUAL_LABEL_VOCABULARY), label_export
-scripts/             apply_comments.py — one-shot DB script, not imported by anything
-```
+- Las 23 tablas se crearon ad-hoc; no hay generador de DDL del esquema real.
+- `generation/anti_patterns.py` es un catálogo de solo datos (sin `__main__`): importarlo da el
+  esquema esperado; ejecutarlo no hace nada.
+- Si la BD y el catálogo divergen, las métricas cambian en silencio.
+- Nombres de tabla sensibles a mayúsculas — siempre entre comillas dobles.
+- Oracle permite una sola columna LONG por tabla (ORA-01754).
+- `config.yaml` dice `tables_count: 10`; el real es 23 — el valor no se usa.
 
-There is no `evaluator.py` / `reporter.py` facade anymore — they were pure pass-throughs
-(deletion test: deleting them removed a hop, concentrated nothing). Call `metrics.py`,
-`validation.py`, `anomaly.py` directly.
+## Referencia
 
-## Tests & lint
-
-```bash
-.venv/bin/python -m pytest tests/ -v                 # 472 tests, NO DB required (mock-based)
-.venv/bin/python -m pytest tests/test_rule_engine.py::TestSchemaSpySignals -q   # single test
-.venv/bin/python -m ruff check src tests scripts      # 11 pre-existing errors (RUF012 mutable
-                                                       # class defaults in rule_engine.py/anti_patterns.py); new code should be lint-clean
-```
-
-## Critical invariants (learned the hard way)
-
-- **Ground truth is rule-engine aligned** — `ground_truth.build_ground_truth_map()` and the
-  generator manifest both run `rule_engine.classify()` on the schema, so detection and truth
-  share label semantics.
-- **Keyword lists live only in `rule_engine.py`** — `SQL_RESERVED_WORDS`, `_kw_match`,
-  `NUMBER_KEYWORDS`, `DATE_KEYWORDS_HIGH` are imported (not copied) by `ddl_generator.py`.
-  The old "mirror copies, keep in sync by hand" invariant is gone — don't reintroduce a local
-  copy in a generation module.
-- **Rule label → manual label mapping lives only in `ground_truth.RULE_TO_MANUAL`** —
-  `recommender.py` and `label_export.py` both import it instead of keeping their own map.
-  Same for the label vocabulary (`ground_truth.MANUAL_LABEL_VOCABULARY`).
-- **Keyword matching is token-boundary** (`_kw_match`) — substring matching caused false
-  positives ('fec' matched inside 'afectada'). Never revert to `kw in name`.
-- **SchemaSpy detections are report-level** (`detect_missing_pk` / `detect_redundant_indexes` /
-  `detect_implicit_fks` are NOT in the `classify()` rule chain) — adding them there would mask
-  all other detections (all 23 tables lack PK) and pollute classification metrics.
-- **Column-level date/number_as_text beats table-level inconsistent_naming** in the merge
-  (deliberate; issue #3).
-- **Column-level polymorphic beats table-level giant_table** in the merge (deliberate; issue #7:
-  TODO_EN_UNO `_O_` columns) — eav/inconsistent_naming keep masking polymorphic
-  (CONFIGURACION.TIPO_DATO stays eav by design).
-- **ColumnRuleEngine must be invoked per table** in `classify()` — a flat run collapses
-  same-named columns (ACTIVO × 4) into one detection (issue #2).
-- Ground truth is structural per-table; semantic embeddings do NOT improve ARI (α=0 wins) —
-  embeddings are for semantic redundancy, not anti-pattern classification.
-- **A vs B is settled, measured, and reproducible** (`evaluation/head_to_head.py`, no DB
-  needed). Both branches scored with both rulers on the 243 manual labels:
-
-  | Branch          |    ARI |    NMI | Accuracy | F1-macro |
-  | --------------- | -----: | -----: | -------: | -------: |
-  | Rule engine (A) | 0.7667 | 0.8058 |   0.8930 |   0.8467 |
-  | Clustering (B)  | 0.5008 | 0.4199 |   0.7078 |   0.2639 |
-
-  A wins all four, including B's own metrics, and B's accuracy/F1 are an **upper bound**
-  (majority-vote cluster naming leaks the ground truth to B). B scores 0.000 on six of ten
-  classes — a cluster is named for its majority, so minority anti-patterns are never
-  pronounced. `alpha_sweep()`: BERT is actively harmful, ARI 0.5008 (α=0) → ~0.30 once on.
-  A's own weaknesses, also measured: 14 columns in CLIENTES_DIRECCIONES over-flagged as
-  `inconsistent_naming` (table-level verdict contaminating clean columns), and
-  `impossible_data` at 0.000 (limitation #6). Write-up: `docs/veredicto_reglas_vs_ml.html`.
-- **`head_to_head._run_branch_a` must apply `RULE_TO_MANUAL`** — the engine emits finer
-  labels (`bad_boolean`, `date_as_text`) than the manual vocabulary; skipping the translation
-  silently drops A from 0.8930 to 0.8560 and looks like a real regression.
-- **One-Class SVM fallback was removed** (was worse than rules, disabled, kept alive only by
-  its own tests) — don't resurrect it as a shortcut; fix the rule engine instead.
-
-## Configuration
-
-- `SKIP_BERT = True` in notebook 02 → synthetic embeddings (avoids ~470MB MiniLM download).
-  Current pickle was built with real embeddings.
-- Classification weights (notebooks): α=0.15, β=0.35, γ=0.45, δ=0.05
-- Best clustering (re-validated, issue #1): α=0.00, β=0.35, γ=0.45, δ=0.20 + PCA 20D + HDBSCAN → ARI 0.5815
-- Rule Engine (aligned GT, circular): accuracy 0.9877 / F1-macro 0.9057 (243 columns);
-  `impossible_data` 0.00 — verified: the extractor is correct; the state
-  `is_foreign_key and not fk_references_column` only exists in the synthetic benchmark
-  (the deleted schema_generator set FK without reference); real Oracle has zero R constraints and parent
-  keys have duplicates/nulls so FKs cannot even be created (issue #6, documented limitation)
-- Rule Engine (manual GT, honest): accuracy 0.8930 / F1-macro 0.8467 — polymorphic 1.00/1.00
-  (issue #7 fix: `_O_` + giant_table→polymorphic merge exemption; FLAG_* stays
-  inconsistent_naming by design) + self_contradictory 1.00/1.00 y wrong_data_types 0.96/0.96
-  (CLOB fix: rules 1-3 gate incluye CLOB; BLOB/LONG excluidos) + impossible_data 0.00
-  (documented limitation #6: verified — extractor correct, parent keys have duplicates/nulls so
-  FKs cannot be created; REGISTRO_ID indetectable from metadata) + sobredetección de clean
-
-## Gotchas
-
-- Table names case-sensitive in Oracle — always double-quote
-- Oracle allows only one LONG column per table (ORA-01754) — catalog uses CLOB/BLOB for the rest
-- Oracle rejects exact duplicate indexes (ORA-01408) — redundant-index anti-pattern is a
-  composite index duplicating a single-column prefix; the two in the DB (EMPLEADOS,
-  ORDENES_COMPRA) were created manually
-- `config.yaml` says `tables_count:10` but actual count is 23 — config value is unused
-
-## Reference
-
-- `docs/00_PROJECT_STATUS_REPORT.md` — full status report, phase by phase
-- `docs/research_extraction_preprocessing.md` — best-practices research with primary sources
-- `docs/rule_engine_and_future_ml_report.md` — rule engine design + ML fallback exploration
-- GitHub issues #1-#7 (closed) document each improvement with root-cause analysis
+- `docs/00_PROJECT_STATUS_REPORT.md`, `docs/research_extraction_preprocessing.md` — histórico.
+- `docs/veredicto_reglas_vs_ml.html` está en la rama `rule-engine`, no aquí: su conclusión
+  ("BERT es dañino") es justo el artefacto que el invariante 1 explica.
