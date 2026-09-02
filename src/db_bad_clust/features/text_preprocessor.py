@@ -24,6 +24,10 @@ from __future__ import annotations
 
 import logging
 import re
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from db_bad_clust.data.schema_extractor import ColumnMetadata
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +113,77 @@ ABBREVIATIONS = {
 }
 
 
+# Spanish overrides, for the sentences `build_document` writes.
+#
+# The dictionary above expands into English, which is right for `process` (it
+# feeds a bare noun phrase to a multilingual encoder) and wrong inside a Spanish
+# sentence: "columna registro identifier" is a sentence in neither language.
+# Only seven of this corpus's tokens hit the English dictionary at all, but two
+# of them are the most frequent in the schema — `col` (53 columns) and `id`
+# (24) — so the mismatch is not marginal. Applied *over* ABBREVIATIONS, so
+# entries with no Spanish equivalent (qty, amt, ...) still expand.
+ABBREVIATIONS_ES = {
+    "id": "identificador",
+    "pk": "clave primaria",
+    "fk": "clave foranea",
+    "uq": "unico",
+    "idx": "indice",
+    "col": "columna",
+    "tbl": "tabla",
+    "fld": "campo",
+    "num": "numero",
+    "no": "numero",
+    "cant": "cantidad",
+    "qty": "cantidad",
+    "amt": "importe",
+    "desc": "descripcion",
+    "descr": "descripcion",
+    "info": "informacion",
+    "config": "configuracion",
+    "temp": "temporal",
+    "fec": "fecha",
+    "dt": "fecha",
+    "ts": "marca de tiempo",
+    "cod": "codigo",
+    "dir": "direccion",
+    "addr": "direccion",
+    "tel": "telefono",
+    "obs": "observaciones",
+    "ref": "referencia",
+    "reg": "registro",
+    "val": "valor",
+    "usr": "usuario",
+    "emp": "empleado",
+    "empl": "empleado",
+    "cli": "cliente",
+    "prod": "producto",
+    "prov": "proveedor",
+    "dept": "departamento",
+    "cat": "categoria",
+    "subcat": "subcategoria",
+    "org": "organizacion",
+    "msg": "mensaje",
+    "txt": "texto",
+    "img": "imagen",
+    "doc": "documento",
+    "seq": "secuencia",
+    "attr": "atributo",
+    "param": "parametro",
+    "min": "minimo",
+    "max": "maximo",
+    "avg": "promedio",
+    "cnt": "conteo",
+    "sum": "total",
+    "prev": "anterior",
+    "curr": "actual",
+    "cur": "actual",
+    "orig": "original",
+    "src": "origen",
+    "dest": "destino",
+    "dst": "destino",
+}
+
+
 # ---------------------------------------------------------------------------
 # Preprocessor
 # ---------------------------------------------------------------------------
@@ -126,6 +201,16 @@ class TextPreprocessor:
         self.abbreviations = abbreviations or ABBREVIATIONS
         # Compile dictionary for efficient lookup
         self._abbrev_lower = {k.lower(): v for k, v in self.abbreviations.items()}
+
+    @classmethod
+    def for_documents(cls) -> TextPreprocessor:
+        """A preprocessor whose expansions match the language of the documents.
+
+        `build_document` writes Spanish; the default dictionary expands into
+        English. Use this wherever documents are built, so the names inside a
+        sentence are in the sentence's own language.
+        """
+        return cls(abbreviations={**ABBREVIATIONS, **ABBREVIATIONS_ES})
 
     # ── Full pipeline ─────────────────────────────────────────────────
 
@@ -178,6 +263,132 @@ class TextPreprocessor:
             text = f"{text} | {comment.strip()}"
 
         return text
+
+    # ── Column documents ──────────────────────────────────────────────
+
+    def build_document(
+        self,
+        column: ColumnMetadata,
+        table_name: str,
+        table_comment: str | None = None,
+        include_table_comment: bool = True,
+    ) -> str:
+        """Describe one column as a Spanish sentence, type and keys included.
+
+        `process` returns a bare noun phrase — "empleados: fecha nacimiento" —
+        which says what the column is *about* and nothing about how it is
+        stored. An encoder reading that cannot tell FECHA_INGRESO DATE from
+        FECHA_INGRESO VARCHAR2(20), and telling those apart is exactly the
+        `wrong_data_types` anti-pattern. Writing the type out in words puts
+        both halves in the same sentence, so the discordance between what a
+        column is called and how it is declared becomes something the
+        embedding can represent.
+
+        The sentence is Spanish because the schema and its comments are, and
+        the encoder is multilingual.
+
+        Returns:
+            e.g. "tabla empleados, columna fecha ingreso, tipo texto de
+            longitud variable de hasta 20 caracteres, admite nulos"
+        """
+        parts = [
+            f"tabla {self.process(table_name)}",
+            f"columna {self.process(column.name)}",
+            f"tipo {self._describe_type(column)}",
+        ]
+        parts.extend(self._describe_constraints(column))
+
+        sentences = [", ".join(parts)]
+        if include_table_comment and table_comment and table_comment.strip():
+            sentences.append(f"La tabla contiene: {table_comment.strip()}")
+        if column.comments and column.comments.strip():
+            sentences.append(column.comments.strip())
+        return ". ".join(sentence.rstrip(". ") for sentence in sentences) + "."
+
+    def build_documents(
+        self,
+        schema: object,
+        include_table_comment: bool = True,
+    ) -> tuple[list[str], list[str]]:
+        """Build a document per column across a whole schema.
+
+        Returns:
+            (documents, keys) where keys are "TABLE.COLUMN", in the same order,
+            so the embeddings can be aligned with any other per-column table.
+        """
+        documents: list[str] = []
+        keys: list[str] = []
+        for table in schema.tables:  # type: ignore[attr-defined]
+            for column in table.columns:
+                documents.append(
+                    self.build_document(
+                        column,
+                        table.name,
+                        table.table_comment,
+                        include_table_comment=include_table_comment,
+                    )
+                )
+                keys.append(f"{table.name}.{column.name}")
+        return documents, keys
+
+    # ── Describing a column in words ──────────────────────────────────
+
+    def _describe_type(self, column: ColumnMetadata) -> str:
+        """Render the Oracle type as Spanish prose."""
+        oracle_type = (column.data_type or "").upper().strip()
+        length = column.data_length
+        scale = column.data_scale
+        precision = column.data_precision
+
+        if oracle_type in {"VARCHAR2", "VARCHAR", "NVARCHAR2"}:
+            return (
+                f"texto de longitud variable de hasta {length} caracteres"
+                if length
+                else "texto de longitud variable"
+            )
+        if oracle_type in {"CHAR", "NCHAR"}:
+            return (
+                f"texto de longitud fija de {length} caracteres"
+                if length
+                else "texto de longitud fija"
+            )
+        if oracle_type in {"NUMBER", "NUMERIC", "DECIMAL", "FLOAT", "BINARY_DOUBLE", "BINARY_FLOAT"}:
+            if scale:
+                return f"numero decimal con {precision or 'varios'} digitos y {scale} decimales"
+            return "numero entero"
+        if oracle_type == "DATE":
+            return "fecha"
+        if oracle_type.startswith("TIMESTAMP"):
+            return "marca de tiempo"
+        if oracle_type.startswith("INTERVAL"):
+            return "intervalo de tiempo"
+        if oracle_type in {"CLOB", "NCLOB"}:
+            return "texto largo sin limite de longitud"
+        if oracle_type == "LONG":
+            return "texto largo en el tipo heredado LONG"
+        if oracle_type in {"BLOB", "RAW", "LONG RAW", "BFILE"}:
+            return "datos binarios"
+        # An unrecognised type is still information — never silently drop it.
+        return oracle_type.lower() if oracle_type else "tipo desconocido"
+
+    @staticmethod
+    def _describe_constraints(column: ColumnMetadata) -> list[str]:
+        """Render nullability and keys as Spanish prose."""
+        parts = ["admite nulos" if column.nullable else "obligatorio"]
+        if column.is_primary_key:
+            parts.append("es clave primaria")
+        if column.is_foreign_key:
+            target = column.fk_references_table
+            parts.append(
+                f"es clave foranea hacia {target.lower()}" if target else "es clave foranea"
+            )
+        if column.is_unique:
+            parts.append("con valores unicos")
+        if column.is_indexed:
+            parts.append("indexada")
+        if column.default_value:
+            parts.append(f"con valor por defecto {str(column.default_value).strip()}")
+        return parts
 
     def process_batch(self, columns: list[str], table_name: str | None = None) -> list[str]:
         """

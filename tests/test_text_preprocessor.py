@@ -18,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 
 import pytest
 
+from db_bad_clust.data.schema_extractor import ColumnMetadata
 from db_bad_clust.features.text_preprocessor import TextPreprocessor, preprocess
 
 # ── Fixture ─────────────────────────────────────────────────────────────
@@ -364,3 +365,154 @@ class TestQuickAccessFunction:
         """Module-level function works with table_name."""
         result = preprocess("FECHA_NACIMIENTO", table_name="EMPLEADOS")
         assert result == "empleados: fecha nacimiento"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Column documents — what the encoder is actually given to read
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestSpanishExpansions:
+    """The documents are Spanish sentences; expanding into English fights them.
+
+    Only seven tokens in this corpus hit the English dictionary, and the two
+    that matter are the worst offenders: `id` appears 24 times and `col` 53.
+    "columna registro identifier" is a sentence in neither language.
+    """
+
+    def test_default_dictionary_expands_id_to_english(self):
+        assert "identifier" in TextPreprocessor().process("REGISTRO_ID")
+
+    def test_document_preprocessor_expands_id_to_spanish(self):
+        assert "identificador" in TextPreprocessor.for_documents().process("REGISTRO_ID")
+
+    def test_document_preprocessor_keeps_the_english_entries_it_does_not_override(self):
+        """Overriding is additive: an entry with no Spanish equivalent survives."""
+        preprocessor = TextPreprocessor.for_documents()
+        assert "unique identifier" in preprocessor.process("UUID_CAMPO")
+        assert preprocessor.process("UUID_CAMPO") == TextPreprocessor().process("UUID_CAMPO")
+
+    def test_spanish_abbreviations_reach_the_document(self):
+        doc = TextPreprocessor.for_documents().build_document(
+            ColumnMetadata(name="FEC_ALTA", data_type="DATE", nullable=True), "EMPLEADOS"
+        )
+        assert "fecha" in doc
+        assert "identifier" not in doc
+
+
+class TestBuildDocument:
+    """`process` yields "empleados: fecha nacimiento" — a noun phrase with no
+    type in it, so no encoder reading it can tell a date stored as DATE from a
+    date stored as VARCHAR2. `build_document` writes the type and the
+    constraints out in words, which is what makes that discordance visible.
+    """
+
+    @staticmethod
+    def _column(**kwargs) -> ColumnMetadata:
+        defaults = {"name": "FECHA_NACIMIENTO", "data_type": "DATE", "nullable": True}
+        return ColumnMetadata(**{**defaults, **kwargs})
+
+    def test_names_the_table_and_the_column_in_words(self):
+        doc = TextPreprocessor().build_document(self._column(), table_name="EMPLEADOS")
+        assert "empleados" in doc
+        assert "fecha nacimiento" in doc
+
+    def test_a_date_column_is_described_as_a_date(self):
+        doc = TextPreprocessor().build_document(self._column(data_type="DATE"), "EMPLEADOS")
+        assert "fecha" in doc
+
+    def test_variable_text_carries_its_length(self):
+        doc = TextPreprocessor().build_document(
+            self._column(data_type="VARCHAR2", data_length=50), "EMPLEADOS"
+        )
+        assert "texto" in doc
+        assert "50" in doc
+
+    def test_fixed_width_text_is_distinguished_from_variable(self):
+        fixed = TextPreprocessor().build_document(
+            self._column(data_type="CHAR", data_length=1), "TODO_EN_UNO"
+        )
+        variable = TextPreprocessor().build_document(
+            self._column(data_type="VARCHAR2", data_length=1), "TODO_EN_UNO"
+        )
+        assert fixed != variable
+        assert "fija" in fixed
+
+    def test_an_integer_and_a_decimal_read_differently(self):
+        entero = TextPreprocessor().build_document(
+            self._column(data_type="NUMBER", data_precision=10, data_scale=0), "VENTAS"
+        )
+        decimal = TextPreprocessor().build_document(
+            self._column(data_type="NUMBER", data_precision=10, data_scale=2), "VENTAS"
+        )
+        assert "entero" in entero
+        assert "decimal" in decimal
+
+    def test_large_text_and_binary_are_named(self):
+        clob = TextPreprocessor().build_document(self._column(data_type="CLOB"), "T")
+        blob = TextPreprocessor().build_document(self._column(data_type="BLOB"), "T")
+        assert "texto largo" in clob
+        assert "binario" in blob
+
+    def test_an_unknown_type_is_passed_through_rather_than_dropped(self):
+        doc = TextPreprocessor().build_document(self._column(data_type="XMLTYPE"), "T")
+        assert "xmltype" in doc.lower()
+
+    def test_nullability_is_stated_either_way(self):
+        opcional = TextPreprocessor().build_document(self._column(nullable=True), "T")
+        obligatorio = TextPreprocessor().build_document(self._column(nullable=False), "T")
+        assert "admite nulos" in opcional
+        assert "obligatorio" in obligatorio
+
+    def test_keys_are_stated(self):
+        pk = TextPreprocessor().build_document(self._column(is_primary_key=True), "T")
+        fk = TextPreprocessor().build_document(
+            self._column(is_foreign_key=True, fk_references_table="CLIENTES"), "T"
+        )
+        assert "clave primaria" in pk
+        assert "clave foranea" in fk
+        assert "clientes" in fk
+
+    def test_the_comment_is_appended_verbatim(self):
+        doc = TextPreprocessor().build_document(
+            self._column(comments="Fecha de alta del empleado en la empresa"), "EMPLEADOS"
+        )
+        assert "Fecha de alta del empleado en la empresa" in doc
+
+    def test_a_date_stored_as_text_states_both_the_concept_and_the_type(self):
+        """The wrong_data_types case: the name says date, the type says text."""
+        doc = TextPreprocessor().build_document(
+            self._column(name="FECHA_INGRESO", data_type="VARCHAR2", data_length=20),
+            "EMPLEADOS",
+        )
+        assert "fecha ingreso" in doc
+        assert "texto" in doc
+
+    def test_no_doubled_sentence_separator(self):
+        doc = TextPreprocessor().build_document(
+            self._column(comments="Identificador del registro."),
+            "AUDITORIA_LOG",
+            table_comment="Log de auditoria.",
+        )
+        assert ".." not in doc
+
+    def test_the_table_comment_can_be_left_out(self):
+        column = self._column()
+        with_comment = TextPreprocessor().build_document(
+            column, "AUDITORIA_LOG", table_comment="Log de auditoria."
+        )
+        without = TextPreprocessor().build_document(
+            column, "AUDITORIA_LOG", table_comment="Log de auditoria.", include_table_comment=False
+        )
+        assert "Log de auditoria" in with_comment
+        assert "Log de auditoria" not in without
+
+    def test_the_same_name_in_two_types_yields_two_documents(self):
+        as_date = TextPreprocessor().build_document(
+            self._column(name="FECHA_INGRESO", data_type="DATE"), "EMPLEADOS"
+        )
+        as_text = TextPreprocessor().build_document(
+            self._column(name="FECHA_INGRESO", data_type="VARCHAR2", data_length=20),
+            "EMPLEADOS",
+        )
+        assert as_date != as_text
