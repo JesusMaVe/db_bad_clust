@@ -98,6 +98,42 @@ class TestExperiment:
         assert str(target) in capsys.readouterr().out
 
 
+class TestSweepAndAblation:
+    def test_sweep_reports_one_row_per_alpha(self, fixture_paths, capsys):
+        pickle_path, labels_path = fixture_paths
+        code = main(
+            ["experiment", "--pickle", pickle_path, "--labels", labels_path,
+             "--csv", "", "--sweep"]
+        )
+        out = capsys.readouterr().out
+        assert code == 0
+        assert "alpha=0.00" in out
+        assert "alpha=1.00" in out
+
+    def test_ablation_compares_the_given_pickles_against_the_floor(
+        self, fixture_paths, capsys
+    ):
+        pickle_path, labels_path = fixture_paths
+        code = main(
+            ["experiment", "--pickle", pickle_path, "--labels", labels_path,
+             "--csv", "", "--ablation", pickle_path]
+        )
+        out = capsys.readouterr().out
+        assert code == 0
+        assert "structure only (alpha=0)" in out
+
+    def test_without_giants_says_what_it_dropped_and_why(self, fixture_paths, capsys):
+        pickle_path, labels_path = fixture_paths
+        code = main(
+            ["experiment", "--pickle", pickle_path, "--labels", labels_path,
+             "--csv", "", "--without-giants"]
+        )
+        out = capsys.readouterr().out
+        assert code == 0
+        assert "property" in out
+        assert "40 columns" in out  # the fixture has no giant tables to drop
+
+
 class TestErrorHandling:
     def test_missing_input_file_reports_the_path(self, capsys):
         code = main(["experiment", "--pickle", "does/not/exist.pkl"])

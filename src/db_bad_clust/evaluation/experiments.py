@@ -320,8 +320,72 @@ def evaluate(
     )
 
 
-def format_diagnostics(dataset: Dataset, configs: dict[str, dict[str, float]]) -> str:
+def weights_for(alpha: float, base: dict[str, float] | None = None) -> dict[str, float]:
+    """Weights at a given alpha, the rest sharing what is left in fixed ratio.
+
+    Keeps the structural blocks' relative proportions constant so a sweep
+    varies exactly one thing: how much say the semantic block gets.
+    """
+    base = base or STRUCTURE_ONLY
+    structural = base["beta"] + base["gamma"] + base["delta"]
+    scale = (1.0 - alpha) / structural if structural else 0.0
+    return {
+        "alpha": alpha,
+        "beta": base["beta"] * scale,
+        "gamma": base["gamma"] * scale,
+        "delta": base["delta"] * scale,
+    }
+
+
+def sweep(
+    dataset: Dataset,
+    alphas: tuple[float, ...] = (0.00, 0.10, 0.25, 0.50, 0.75, 1.00),
+    normalize: str = "block",
+    **kwargs: object,
+) -> list[ClusterScore]:
+    """Score the pipeline across the semantic block's share of the space.
+
+    With `normalize="block"` this is a real sweep. With `normalize="zscore"`
+    it is the historical switch: every alpha above zero hands the embeddings
+    ~90% of the variance regardless of what the number says.
+    """
+    return [
+        evaluate(f"alpha={alpha:.2f}", dataset, weights_for(alpha, STRUCTURE_ONLY), normalize=normalize, **kwargs).score  # type: ignore[arg-type]
+        for alpha in alphas
+    ]
+
+
+def ablation(
+    datasets: dict[str, Dataset],
+    alpha: float = 1.00,
+    **kwargs: object,
+) -> list[ClusterScore]:
+    """Score each semantic representation at the same weight, plus the floor.
+
+    The structure-only row is computed from whichever dataset comes first:
+    at alpha=0 the semantic block is switched off, so every dataset gives the
+    same answer, and computing it once keeps the comparison honest.
+    """
+    if not datasets:
+        return []
+    first = next(iter(datasets.values()))
+    rows = [
+        evaluate("structure only (alpha=0)", first, weights_for(0.0), **kwargs).score  # type: ignore[arg-type]
+    ]
+    rows += [
+        evaluate(name, dataset, weights_for(alpha), **kwargs).score  # type: ignore[arg-type]
+        for name, dataset in datasets.items()
+    ]
+    return rows
+
+
+def format_diagnostics(configs: dict[str, tuple[Dataset, dict[str, float]]]) -> str:
     """Report, per configuration, whether its score can mean anything.
+
+    Each entry pairs a name with the dataset AND the weights it was scored
+    under — an ablation compares different feature blocks, so a diagnostic
+    that reused one dataset for every name would report the same numbers
+    under three different labels.
 
     Two questions, in order. How many columns does the representation tell
     apart? And does the score survive a change of floating-point width? A
@@ -333,7 +397,7 @@ def format_diagnostics(dataset: Dataset, configs: dict[str, dict[str, float]]) -
         "-" * 76,
         f"{'Configuration':<28} {'distinct':>12} {'duplicated':>11} {'largest tie':>12}",
     ]
-    for name, weights in configs.items():
+    for name, (dataset, weights) in configs.items():
         d = representation_degeneracy(dataset, weights)
         lines.append(
             f"{name:<28} {d['n_distinct']:>5}/{d['n_columns']:<6} "
@@ -343,7 +407,7 @@ def format_diagnostics(dataset: Dataset, configs: dict[str, dict[str, float]]) -
         "",
         f"{'Configuration':<28} {'ARI float32':>12} {'ARI float64':>12} {'gap':>12}",
     ]
-    for name, weights in configs.items():
+    for name, (dataset, weights) in configs.items():
         p = precision_sensitivity(dataset, weights)
         lines.append(
             f"{name:<28} {p['ari_float32']:>12.4f} {p['ari_float64']:>12.4f} {p['gap']:>12.4f}"
@@ -360,14 +424,16 @@ def format_diagnostics(dataset: Dataset, configs: dict[str, dict[str, float]]) -
 def format_table(rows: list[ClusterScore]) -> str:
     """Render scored configurations as one comparable table."""
     lines = [
-        f"{'Configuration':<28} {'ARI':>8} {'NMI':>8} {'Accuracy':>10} {'F1-macro':>10} {'Groups':>8}",
-        "-" * 76,
+        f"{'Configuration':<28} {'ARI':>8} {'NMI':>8} {'AMI':>8} {'V':>8} "
+        f"{'Accuracy':>9} {'F1-macro':>9} {'k':>4}",
+        "-" * 92,
     ]
     lines += [
-        f"{r.name:<28} {r.ari:>8.4f} {r.nmi:>8.4f} {r.accuracy:>10.4f} "
-        f"{r.f1_macro:>10.4f} {r.n_groups:>8}"
+        f"{r.name:<28} {r.ari:>8.4f} {r.nmi:>8.4f} {r.ami:>8.4f} {r.v_measure:>8.4f} "
+        f"{r.accuracy:>9.4f} {r.f1_macro:>9.4f} {r.n_groups:>4}"
         for r in rows
     ]
     lines.append("")
     lines.append("Accuracy/F1 use ground-truth-assisted cluster naming — an upper bound.")
+    lines.append("AMI, not NMI, is the one to compare across rows with different k.")
     return "\n".join(lines)

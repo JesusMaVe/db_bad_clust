@@ -9,13 +9,17 @@ import pytest
 
 from db_bad_clust.evaluation.experiments import (
     Dataset,
+    ablation,
     block_variance_shares,
     build_phi,
     evaluate,
+    format_diagnostics,
     format_table,
     precision_sensitivity,
     representation_degeneracy,
     run_clustering,
+    sweep,
+    weights_for,
 )
 
 
@@ -227,6 +231,65 @@ class TestPrecisionSensitivity:
         assert result["gap"] == pytest.approx(abs(result["ari_float32"] - result["ari_float64"]))
 
 
+class TestWeightsFor:
+    def test_alpha_zero_leaves_the_structural_ratios_intact(self):
+        weights = weights_for(0.0, {"alpha": 0.0, "beta": 0.35, "gamma": 0.45, "delta": 0.20})
+        assert weights == {"alpha": 0.0, "beta": 0.35, "gamma": 0.45, "delta": 0.20}
+
+    def test_alpha_one_silences_the_structural_blocks(self):
+        weights = weights_for(1.0)
+        assert weights["alpha"] == 1.0
+        assert weights["beta"] == weights["gamma"] == weights["delta"] == 0.0
+
+    def test_the_structural_blocks_keep_their_relative_proportions(self):
+        """Half the space to the semantics, the rest split 35:45:20 as before."""
+        weights = weights_for(0.5, {"alpha": 0.0, "beta": 0.35, "gamma": 0.45, "delta": 0.20})
+        assert weights["beta"] == pytest.approx(0.175)
+        assert weights["gamma"] == pytest.approx(0.225)
+        assert weights["delta"] == pytest.approx(0.100)
+
+
+class TestSweep:
+    def test_one_row_per_alpha_named_after_it(self):
+        rows = sweep(_dataset(40), alphas=(0.0, 0.5), min_cluster_size=5)
+        assert [r.name for r in rows] == ["alpha=0.00", "alpha=0.50"]
+
+    def test_every_row_carries_ami_alongside_nmi(self):
+        for row in sweep(_dataset(40), alphas=(0.5,), min_cluster_size=5):
+            assert -1.0 <= row.ami <= 1.0
+
+
+class TestAblation:
+    def test_puts_the_structural_floor_first(self):
+        rows = ablation({"docs": _dataset(40)}, alpha=1.0, min_cluster_size=5)
+        assert rows[0].name == "structure only (alpha=0)"
+        assert [r.name for r in rows[1:]] == ["docs"]
+
+    def test_scores_every_representation_given(self):
+        rows = ablation(
+            {"a": _dataset(40), "b": _dataset(40)}, alpha=1.0, min_cluster_size=5
+        )
+        assert len(rows) == 3
+
+    def test_no_datasets_yields_no_rows(self):
+        assert ablation({}) == []
+
+
+class TestFormatDiagnostics:
+    def test_each_name_is_scored_against_its_own_dataset(self):
+        """Reusing one dataset for every name reports one result three times."""
+        tied = TestRepresentationDegeneracy._tied()
+        rich = _dataset(40)
+        text = format_diagnostics(
+            {
+                "tied": (tied, {"alpha": 0.0, "beta": 1.0, "gamma": 0.0, "delta": 0.0}),
+                "rich": (rich, {"alpha": 1.0, "beta": 0.0, "gamma": 0.0, "delta": 0.0}),
+            }
+        )
+        assert "2/40" in text
+        assert "40/40" in text
+
+
 class TestFormatTable:
     def test_renders_one_line_per_row_with_the_name(self):
         rows = [
@@ -235,3 +298,9 @@ class TestFormatTable:
         text = format_table(rows)
         assert "solo BERT" in text
         assert "ARI" in text
+
+    def test_reports_ami_and_says_which_metric_to_compare(self):
+        rows = [evaluate("x", _dataset(40), weights_for(1.0)).score]
+        text = format_table(rows)
+        assert "AMI" in text
+        assert "different k" in text

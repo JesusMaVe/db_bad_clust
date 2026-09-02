@@ -9,8 +9,8 @@ command:
               hand-labelled columns. Needs no database.
 
 Usage:
-    db-bad-clust experiment
-    db-bad-clust experiment --baselines --csv output/per_column.csv
+    db-bad-clust experiment --sweep
+    db-bad-clust experiment --without-giants --ablation output/intermediate_*.pkl
 """
 
 from __future__ import annotations
@@ -26,21 +26,54 @@ def _experiment(args: argparse.Namespace) -> int:
     """Score the clustering pipeline against the manual ground truth."""
     from db_bad_clust.evaluation.cluster_scoring import write_per_column_csv
     from db_bad_clust.evaluation.experiments import (
+        GIANT_TABLES,
         STRUCTURE_ONLY,
+        ablation,
         evaluate,
         format_diagnostics,
         format_table,
         load_dataset,
+        sweep,
+        weights_for,
     )
 
     dataset = load_dataset(pickle_path=args.pickle, labels_path=args.labels)
+    if args.without_giants:
+        dataset = dataset.without_tables(GIANT_TABLES)
+        print(f"excluding {', '.join(sorted(GIANT_TABLES))} — giant_table is a property")
+        print("of the table, not of the column, so no per-column encoder can see it\n")
     print(f"{dataset.n_columns} columns, {len(set(dataset.table_of))} tables\n")
 
     name = "structure only (alpha=0)"
     run = evaluate(name, dataset, STRUCTURE_ONLY)
     print(format_table([run.score]))
     print()
-    print(format_diagnostics(dataset, {name: STRUCTURE_ONLY}))
+    print(format_diagnostics({name: (dataset, STRUCTURE_ONLY)}))
+
+    if args.sweep:
+        print()
+        print("What does the semantic block contribute? (corrected fusion)")
+        print(format_table(sweep(dataset)))
+
+    if args.ablation:
+        others = {
+            Path(path).stem: load_dataset(pickle_path=path, labels_path=args.labels)
+            for path in args.ablation
+        }
+        if args.without_giants:
+            others = {k: v.without_tables(GIANT_TABLES) for k, v in others.items()}
+        print()
+        print(f"Semantic representations, all at alpha={args.alpha:.2f}")
+        print(format_table(ablation(others, alpha=args.alpha)))
+        print()
+        print(
+            format_diagnostics(
+                {
+                    name: (dataset, STRUCTURE_ONLY),
+                    **{k: (d, weights_for(args.alpha)) for k, d in others.items()},
+                }
+            )
+        )
 
     if args.baselines:
         from db_bad_clust.evaluation.ml_baselines import (
@@ -82,6 +115,28 @@ def build_parser() -> argparse.ArgumentParser:
     experiment.add_argument("--pickle", default="output/intermediate_02.pkl")
     experiment.add_argument("--labels", default="output/manual_labels.csv")
     experiment.add_argument("--csv", metavar="PATH", default="output/per_column.csv")
+    experiment.add_argument(
+        "--sweep",
+        action="store_true",
+        help="score across the semantic block's share of the space",
+    )
+    experiment.add_argument(
+        "--ablation",
+        nargs="+",
+        metavar="PICKLE",
+        help="compare semantic representations, one pickle per representation",
+    )
+    experiment.add_argument(
+        "--alpha",
+        type=float,
+        default=1.0,
+        help="weight given to the semantic block in --ablation (default 1.0)",
+    )
+    experiment.add_argument(
+        "--without-giants",
+        action="store_true",
+        help="drop the two tables that alone supply every giant_table label",
+    )
     experiment.add_argument(
         "--baselines",
         action="store_true",

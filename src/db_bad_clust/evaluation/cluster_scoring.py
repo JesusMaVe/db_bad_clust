@@ -45,12 +45,16 @@ class ClusterScore:
     accuracy: float
     f1_macro: float
     n_groups: int
+    ami: float = 0.0
+    v_measure: float = 0.0
 
     def as_row(self) -> dict[str, Any]:
         return {
             "branch": self.name,
             "ari": round(self.ari, 4),
             "nmi": round(self.nmi, 4),
+            "ami": round(self.ami, 4),
+            "v_measure": round(self.v_measure, 4),
             "accuracy": round(self.accuracy, 4),
             "f1_macro": round(self.f1_macro, 4),
             "n_groups": self.n_groups,
@@ -97,11 +101,22 @@ def score(
 ) -> ClusterScore:
     """Score one configuration with both rulers.
 
-    ARI/NMI are computed on the *grouping*, not the names: pass `group_ids`
-    to score the raw cluster ids, since majority-vote naming can merge two
-    clusters into one label and would otherwise misreport the partition.
+    ARI/NMI/AMI/V are computed on the *grouping*, not the names: pass
+    `group_ids` to score the raw cluster ids, since majority-vote naming can
+    merge two clusters into one label and would otherwise misreport the
+    partition.
+
+    AMI is reported alongside NMI because the configurations compared here
+    produce anywhere from 2 to 19 clusters, and NMI rises with the cluster
+    count on its own; AMI corrects for the agreement expected by chance at
+    that count, so it is the one to quote when the counts differ.
     """
-    from sklearn.metrics import accuracy_score, f1_score
+    from sklearn.metrics import (
+        accuracy_score,
+        adjusted_mutual_info_score,
+        f1_score,
+        v_measure_score,
+    )
 
     from db_bad_clust.evaluation.validation import GroundTruthValidator
 
@@ -116,6 +131,8 @@ def score(
         accuracy=float(accuracy_score(true_labels, pred_labels)),
         f1_macro=float(f1_score(true_labels, pred_labels, average="macro", zero_division=0)),
         n_groups=len(set(grouping.tolist())),
+        ami=float(adjusted_mutual_info_score(truth_arr, grouping)),
+        v_measure=float(v_measure_score(truth_arr, grouping)),
     )
 
 

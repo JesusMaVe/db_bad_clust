@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 import numpy as np
 import pytest
 
@@ -25,7 +27,7 @@ class StubEmbedder:
     than something recomputed the way the code computes them.
     """
 
-    AXES = list(CONCEPT_ANCHORS)
+    AXES: ClassVar[list[str]] = list(CONCEPT_ANCHORS)
 
     def __init__(self, routing: dict[str, str] | None = None) -> None:
         self.routing = routing or {}
