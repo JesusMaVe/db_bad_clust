@@ -119,10 +119,46 @@ def load_dataset(
     )
 
 
+def build_phi(
+    dataset: Dataset,
+    weights: dict[str, float],
+    normalize: str = "block",
+) -> np.ndarray:
+    """Fuse the four blocks into the composite vector φ.
+
+    Separated from `run_clustering` because the fusion is where the weights
+    either mean something or do not — see `FeatureBuilder`'s docstring — and
+    an ablation needs to inspect it without clustering.
+    """
+    from db_bad_clust.features.feature_builder import FeatureBuilder
+
+    return FeatureBuilder(**weights, normalize=normalize).build(
+        e_text=dataset.e_text,
+        e_type=dataset.e_type,
+        e_rest=dataset.e_rest,
+        e_stat=dataset.e_stat,
+    )
+
+
+def block_variance_shares(dataset: Dataset, phi: np.ndarray) -> dict[str, float]:
+    """The share of φ's variance each block actually holds.
+
+    The measurement that shows a nominal weight is not the effective one.
+    """
+    widths = [b.shape[1] for b in dataset.blocks]
+    names = ["e_text", "e_type", "e_rest", "e_stat"]
+    variances, start = {}, 0
+    for name, width in zip(names, widths, strict=True):
+        variances[name] = float(phi[:, start : start + width].var(axis=0).sum())
+        start += width
+    total = sum(variances.values()) or 1.0
+    return {k: v / total for k, v in variances.items()}
+
+
 def run_clustering(
     dataset: Dataset,
     weights: dict[str, float],
-    normalize: str = "zscore",
+    normalize: str = "block",
     n_components: int = PCA_COMPONENTS,
     reducer: str = "pca",
     min_cluster_size: int = HDBSCAN_MIN_CLUSTER_SIZE,
@@ -132,14 +168,8 @@ def run_clustering(
     """Fuse the blocks, reduce, cluster. Returns raw cluster ids (-1 = noise)."""
     from db_bad_clust.clustering.cluster_engine import ClusterEngine
     from db_bad_clust.clustering.dimensionality_reducer import DimensionalityReducer
-    from db_bad_clust.features.feature_builder import FeatureBuilder
 
-    phi = FeatureBuilder(**weights).build(
-        e_text=dataset.e_text,
-        e_type=dataset.e_type,
-        e_rest=dataset.e_rest,
-        e_stat=dataset.e_stat,
-    )
+    phi = build_phi(dataset, weights, normalize=normalize)
     reduced = DimensionalityReducer(
         method=reducer,
         n_components=min(n_components, *phi.shape),

@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 import numpy as np
 import pytest
 
 from db_bad_clust.evaluation.experiments import (
     Dataset,
+    block_variance_shares,
+    build_phi,
     evaluate,
     format_table,
     run_clustering,
@@ -87,6 +91,61 @@ class TestRunClustering:
             min_cluster_size=5,
         )
         assert len(set(labels.tolist()) - {-1}) >= 2
+
+
+class TestNormalizeIsHonoured:
+    """The fusion mode must reach FeatureBuilder, not be accepted and dropped."""
+
+    # A weight of exactly 0 silences a block under either mode, so the gap only
+    # opens at a small but non-zero alpha — the case the sweep cared about.
+    WEIGHTS: ClassVar[dict[str, float]] = {
+        "alpha": 0.1,
+        "beta": 0.9,
+        "gamma": 0.0,
+        "delta": 0.0,
+    }
+
+    @staticmethod
+    def _lopsided() -> Dataset:
+        """A 384-dim text block against a 2-dim type block, as in the real corpus."""
+        rng = np.random.default_rng(3)
+        n, half = 60, 30
+        return Dataset(
+            e_text=rng.normal(0, 1, (n, 384)),
+            e_type=np.vstack(
+                [np.tile([0.0, 8.0], (half, 1)), np.tile([8.0, 0.0], (half, 1))]
+            ),
+            e_rest=rng.normal(0, 1, (n, 2)),
+            e_stat=rng.normal(0, 1, (n, 1)),
+            column_index=[f"T{i // half}.C{i}" for i in range(n)],
+            truth=["eav"] * half + ["clean"] * half,
+        )
+
+    def test_block_mode_gives_the_text_block_the_share_alpha_asks_for(self):
+        """alpha=0.1 against beta=0.9 → 0.01 : 0.81, so ~1.2% of the variance."""
+        data = self._lopsided()
+        shares = block_variance_shares(data, build_phi(data, self.WEIGHTS, normalize="block"))
+        assert shares["e_text"] == pytest.approx(0.01 / 0.82, abs=0.005)
+
+    def test_zscore_mode_hands_it_seventy_percent_instead(self):
+        """Same weights: 384 dims x 0.01 against 2 dims x 0.81 → the text wins 70:30."""
+        data = self._lopsided()
+        shares = block_variance_shares(data, build_phi(data, self.WEIGHTS, normalize="zscore"))
+        assert shares["e_text"] == pytest.approx(3.84 / 5.46, abs=0.02)
+
+    def test_the_two_modes_are_not_the_same_space(self):
+        data = self._lopsided()
+        block = build_phi(data, self.WEIGHTS, normalize="block")
+        zscore = build_phi(data, self.WEIGHTS, normalize="zscore")
+        assert not np.allclose(block, zscore)
+
+    def test_unknown_mode_is_rejected(self):
+        with pytest.raises(ValueError, match="normalize"):
+            run_clustering(
+                _dataset(40),
+                {"alpha": 1.0, "beta": 0, "gamma": 0, "delta": 0},
+                normalize="minmax",
+            )
 
 
 class TestEvaluate:

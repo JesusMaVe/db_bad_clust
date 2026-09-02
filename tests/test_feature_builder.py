@@ -327,3 +327,96 @@ class TestErrorHandling:
     def test_n_components_property(self, builder: FeatureBuilder) -> None:
         """n_components property always returns 3."""
         assert builder.n_components == 3
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Block normalization — what alpha/beta/gamma/delta actually weigh
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestBlockNormalization:
+    """Per-dimension z-score leaves each block weighing its own dimension count.
+
+    A z-scored block has variance 1 in every dimension, so its *total* variance
+    equals the number of dimensions: 384 for the embeddings against 12 for the
+    types. Multiplying by alpha afterwards cannot undo that, so alpha does not
+    control the share the block gets. `normalize="block"` divides each block by
+    its total variance first, which is what makes the weights mean what they say.
+    """
+
+    @staticmethod
+    def _shares(phi: np.ndarray, widths: list[int]) -> list[float]:
+        """Fraction of phi's total variance contributed by each block."""
+        variances, start = [], 0
+        for width in widths:
+            variances.append(float(phi[:, start : start + width].var(axis=0).sum()))
+            start += width
+        total = sum(variances)
+        return [v / total for v in variances]
+
+    @staticmethod
+    def _blocks(n: int = 60, wide: int = 100, narrow: int = 4):
+        """A wide block and a narrow one, both with genuine per-dimension variance."""
+        rng = np.random.default_rng(7)
+        return (
+            rng.normal(0, 1, (n, wide)),
+            rng.normal(0, 1, (n, narrow)),
+            rng.normal(0, 1, (n, narrow)),
+        )
+
+    def test_zscore_mode_gives_the_wide_block_its_dimension_count(self) -> None:
+        """100 dims vs 4 vs 4 at equal weights → 100:4:4, i.e. ~92.6% for the wide one."""
+        e_text, e_type, e_rest = self._blocks()
+        phi = FeatureBuilder(
+            alpha=1.0, beta=1.0, gamma=1.0, delta=0.0, normalize="zscore"
+        ).build(e_text, e_type, e_rest)
+        shares = self._shares(phi, [100, 4, 4])
+        assert shares[0] == pytest.approx(100 / 108, abs=0.02)
+        assert shares[1] == pytest.approx(4 / 108, abs=0.02)
+
+    def test_block_mode_gives_equal_weights_equal_shares(self) -> None:
+        """Same three blocks, same weights → one third each, regardless of width."""
+        e_text, e_type, e_rest = self._blocks()
+        phi = FeatureBuilder(
+            alpha=1.0, beta=1.0, gamma=1.0, delta=0.0, normalize="block"
+        ).build(e_text, e_type, e_rest)
+        for share in self._shares(phi, [100, 4, 4]):
+            assert share == pytest.approx(1 / 3, abs=0.02)
+
+    def test_block_mode_shares_follow_the_squared_weights(self) -> None:
+        """alpha=0.2, beta=0.4, gamma=0.4 → shares 0.04 : 0.16 : 0.16, i.e. 1:4:4."""
+        e_text, e_type, e_rest = self._blocks()
+        phi = FeatureBuilder(
+            alpha=0.2, beta=0.4, gamma=0.4, delta=0.0, normalize="block"
+        ).build(e_text, e_type, e_rest)
+        shares = self._shares(phi, [100, 4, 4])
+        assert shares[0] == pytest.approx(1 / 9, abs=0.02)
+        assert shares[1] == pytest.approx(4 / 9, abs=0.02)
+        assert shares[2] == pytest.approx(4 / 9, abs=0.02)
+
+    def test_block_mode_silences_a_block_weighted_zero(self) -> None:
+        e_text, e_type, e_rest = self._blocks()
+        phi = FeatureBuilder(
+            alpha=0.0, beta=0.5, gamma=0.5, delta=0.0, normalize="block"
+        ).build(e_text, e_type, e_rest)
+        assert self._shares(phi, [100, 4, 4])[0] == pytest.approx(0.0, abs=1e-9)
+
+    def test_block_mode_survives_a_constant_block(self) -> None:
+        """A block with no variance must not divide by zero or emit NaN."""
+        e_text, e_type, _ = self._blocks()
+        constant = np.ones((60, 4))
+        phi = FeatureBuilder(normalize="block").build(e_text, e_type, constant)
+        assert np.isfinite(phi).all()
+
+    def test_block_mode_preserves_shape(self) -> None:
+        e_text, e_type, e_rest = self._blocks()
+        stat = np.random.default_rng(1).normal(0, 1, (60, 1))
+        phi = FeatureBuilder(normalize="block").build(e_text, e_type, e_rest, stat)
+        assert phi.shape == (60, 109)
+
+    def test_block_is_the_default(self) -> None:
+        assert FeatureBuilder().normalize == "block"
+
+    def test_unknown_mode_is_rejected(self) -> None:
+        with pytest.raises(ValueError, match="normalize"):
+            FeatureBuilder(normalize="minmax")
