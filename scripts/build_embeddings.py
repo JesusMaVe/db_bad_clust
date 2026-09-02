@@ -42,9 +42,23 @@ def extract_schema(config: str):
         connector.close()
 
 
-def build(schema, model_name: str, include_table_comment: bool = True) -> dict[str, object]:
-    """Documents → embeddings, plus the structural blocks, in one column order."""
-    documents, keys = TextPreprocessor.for_documents().build_documents(
+def build(
+    schema,
+    model_name: str,
+    include_table_comment: bool = True,
+    semantic: str = "documents",
+) -> dict[str, object]:
+    """Documents → embeddings, plus the structural blocks, in one column order.
+
+    `semantic="documents"` puts the raw 384-dim document embedding in e_text.
+    `semantic="anchors"` puts the compact anchor block there instead: one
+    dimension per named concept plus the type-mismatch feature, which is
+    dimensionally comparable to the structural block and readable per column.
+    The anchors read the *name*, not the document — the document states the
+    type, which would tell the encoder the answer it is being asked for.
+    """
+    preprocessor = TextPreprocessor.for_documents()
+    documents, keys = preprocessor.build_documents(
         schema, include_table_comment=include_table_comment
     )
     columns = [col for table in schema.tables for col in table.columns]
@@ -52,7 +66,18 @@ def build(schema, model_name: str, include_table_comment: bool = True) -> dict[s
     from db_bad_clust.features.bert_embedder import BERTEmbedder
 
     embedder = BERTEmbedder(model_name=model_name)
-    e_text = embedder.encode(documents)
+
+    if semantic == "anchors":
+        from db_bad_clust.features.semantic_anchors import SemanticAnchors
+
+        names = [
+            preprocessor.process(col.name, table.name)
+            for table in schema.tables
+            for col in table.columns
+        ]
+        e_text = SemanticAnchors(embedder).build_block(names, columns)
+    else:
+        e_text = embedder.encode(documents)
 
     encoder = StructuralEncoder()
     blocks = encoder.encode_all(columns)
@@ -65,6 +90,7 @@ def build(schema, model_name: str, include_table_comment: bool = True) -> dict[s
         "column_index": keys,
         "documents": documents,
         "include_table_comment": include_table_comment,
+        "semantic": semantic,
         "schema": schema,
         "all_columns": columns,
         "table_names": [t.name for t in schema.tables],
@@ -80,6 +106,12 @@ def main() -> None:
         "--model",
         default="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
         help="Hugging Face sentence encoder; the schema is Spanish, so keep it multilingual",
+    )
+    parser.add_argument(
+        "--semantic",
+        choices=("documents", "anchors"),
+        default="documents",
+        help="what goes in e_text: the raw document embedding, or the anchor block",
     )
     parser.add_argument(
         "--no-table-comment",
@@ -105,7 +137,12 @@ def main() -> None:
             print(f"  {key}\n    {doc}\n")
         return
 
-    data = build(schema, args.model, include_table_comment=not args.no_table_comment)
+    data = build(
+        schema,
+        args.model,
+        include_table_comment=not args.no_table_comment,
+        semantic=args.semantic,
+    )
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
     with output.open("wb") as fh:
