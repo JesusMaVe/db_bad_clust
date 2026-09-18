@@ -8,6 +8,7 @@ import numpy as np
 import pytest
 
 from db_bad_clust.data.schema_extractor import ColumnMetadata, DatabaseSchema, TableMetadata
+from db_bad_clust.evaluation.experiments import Dataset
 from db_bad_clust.evaluation.health_report import (
     MAX_SEVERITY,
     RECOMMENDATIONS,
@@ -36,17 +37,18 @@ def _schema(table_sizes: dict[str, int]) -> DatabaseSchema:
     return DatabaseSchema(tables=tables)
 
 
-def _pickle_data(column_index, table_sizes, n_text=8, n_type=4, n_rest=5, seed=0):
+def _dataset(column_index, table_sizes, n_text=8, n_type=4, n_rest=5, seed=0, truth=None) -> Dataset:
     rng = np.random.default_rng(seed)
     n = len(column_index)
-    return {
-        "column_index": column_index,
-        "e_text": rng.normal(0, 1, (n, n_text)),
-        "e_type": rng.normal(0, 1, (n, n_type)),
-        "e_rest": rng.normal(0, 1, (n, n_rest)),
-        "e_stat": rng.normal(0, 1, (n, 1)),
-        "schema": _schema(table_sizes),
-    }
+    return Dataset(
+        e_text=rng.normal(0, 1, (n, n_text)),
+        e_type=rng.normal(0, 1, (n, n_type)),
+        e_rest=rng.normal(0, 1, (n, n_rest)),
+        e_stat=rng.normal(0, 1, (n, 1)),
+        column_index=column_index,
+        truth=truth,
+        schema=_schema(table_sizes),
+    )
 
 
 class TestSeverityAndRecommendations:
@@ -79,17 +81,29 @@ class TestSeverityAndRecommendations:
 class TestBuildRawFeatures:
     def test_shape_and_table_width_column(self):
         column_index = ["A.C0", "A.C1", "B.C0"]
-        data = _pickle_data(column_index, table_sizes={"A": 2, "B": 1})
-        raw = build_raw_features(data, include_table_width=True)
+        dataset = _dataset(column_index, table_sizes={"A": 2, "B": 1})
+        raw = build_raw_features(dataset, include_table_width=True)
         assert raw.shape == (3, 8 + 4 + 5 + 1 + 1)
         expected_widths = [np.log1p(2), np.log1p(2), np.log1p(1)]
         np.testing.assert_allclose(raw[:, -1], expected_widths)
 
     def test_without_table_width(self):
         column_index = ["A.C0", "B.C0"]
-        data = _pickle_data(column_index, table_sizes={"A": 1, "B": 1})
-        raw = build_raw_features(data, include_table_width=False)
+        dataset = _dataset(column_index, table_sizes={"A": 1, "B": 1})
+        raw = build_raw_features(dataset, include_table_width=False)
         assert raw.shape == (2, 8 + 4 + 5 + 1)
+
+    def test_missing_schema_raises_when_table_width_requested(self):
+        dataset = Dataset(
+            e_text=np.zeros((1, 2)),
+            e_type=np.zeros((1, 2)),
+            e_rest=np.zeros((1, 2)),
+            e_stat=np.zeros((1, 1)),
+            column_index=["A.C0"],
+            schema=None,
+        )
+        with pytest.raises(BadDBError, match="schema"):
+            build_raw_features(dataset, include_table_width=True)
 
 
 class TestFitReferenceModel:
@@ -134,7 +148,9 @@ class TestFitReferenceModel:
         pkl, labels = fixture_paths
         model = fit_reference_model(reference_pickle=pkl, labels_path=labels, folds=5)
 
-        raw = build_raw_features(pickle.load(open(pkl, "rb")))
+        from db_bad_clust.evaluation.experiments import load_dataset
+
+        raw = build_raw_features(load_dataset(pickle_path=pkl, labels_path=labels))
         direct_predictions = model.clf.predict(raw)
         direct_accuracy = float(np.mean(np.array(model.oof_predicted) == direct_predictions))
         # OOF predictions need not equal the direct in-sample fit's own predictions —

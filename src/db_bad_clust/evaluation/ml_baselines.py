@@ -28,6 +28,8 @@ from typing import Any
 
 import numpy as np
 
+from db_bad_clust.evaluation.report_table import Column, render_table
+
 # The structure-only configuration: alpha=0 switches the embeddings off, so
 # this is the baseline the semantic component is measured against.
 CLUSTERING_WEIGHTS = {"alpha": 0.00, "beta": 0.35, "gamma": 0.45, "delta": 0.20}
@@ -35,12 +37,16 @@ PCA_COMPONENTS = 20
 CV_FOLDS = 5
 
 
-def _load(pickle_path: str | Path, labels_path: str | Path) -> tuple[dict[str, Any], list[str]]:
+def _load_phi(pickle_path: str | Path, labels_path: str | Path) -> tuple[np.ndarray, list[str]]:
+    """`random_forest_baseline` alone needs the precomputed `phi` a notebook-02
+    -style pickle stores — that field isn't one of the four raw blocks
+    `evaluation.experiments.load_dataset` loads, so it still opens the file
+    directly rather than going through `Dataset`."""
     from db_bad_clust.evaluation.cluster_scoring import load_manual_labels
 
     with open(pickle_path, "rb") as fh:
         data = pickle.load(fh)
-    return data, load_manual_labels(labels_path, data["column_index"])
+    return data["phi"], load_manual_labels(labels_path, data["column_index"])
 
 
 # ── Supervised baseline ───────────────────────────────────────────────
@@ -64,8 +70,7 @@ def random_forest_baseline(
     from sklearn.ensemble import RandomForestClassifier
     from sklearn.model_selection import cross_val_score
 
-    data, truth = _load(pickle_path, labels_path)
-    phi = data["phi"]
+    phi, truth = _load_phi(pickle_path, labels_path)
     support = Counter(truth)
 
     # sklearn warns rather than fails when a class has fewer members than folds,
@@ -107,20 +112,20 @@ def clustering_algorithm_comparison(
     from sklearn.decomposition import PCA
 
     from db_bad_clust.clustering.cluster_engine import ClusterEngine
+    from db_bad_clust.evaluation.experiments import build_phi, load_dataset
     from db_bad_clust.evaluation.validation import GroundTruthValidator
-    from db_bad_clust.features.feature_builder import FeatureBuilder
 
-    data, truth = _load(pickle_path, labels_path)
-    builder = FeatureBuilder(**CLUSTERING_WEIGHTS)
-    phi = builder.build(
-        e_text=data["e_text"],
-        e_type=data["e_type"],
-        e_rest=data["e_rest"],
-        e_stat=data["e_stat"],
-    )
+    # load_dataset widens the stored float32 blocks to float64 — see its
+    # docstring on why a degenerate structural representation is precision-
+    # sensitive. Building phi here through the same path as `cli experiment`
+    # keeps this table on the same arithmetic width as the rest of the report
+    # it's printed alongside, rather than silently reading float32.
+    dataset = load_dataset(pickle_path=pickle_path, labels_path=labels_path)
+    phi = build_phi(dataset, CLUSTERING_WEIGHTS)
     reduced = PCA(n_components=min(PCA_COMPONENTS, phi.shape[1]), random_state=42).fit_transform(phi)
 
     validator = GroundTruthValidator()
+    truth = dataset.truth
     truth_arr = np.asarray(truth)
     n_true_classes = len(set(truth))
 
@@ -167,16 +172,23 @@ def format_baselines(rf: dict[str, Any], clustering: list[dict[str, Any]]) -> st
     add("")
 
     add("Unsupervised baseline — clustering algorithms on the same vector")
-    add("-" * 72)
-    add(f"  {'method':<16}{'ARI':>9}{'NMI':>9}{'clusters':>10}{'noise':>8}")
+    columns = [
+        Column("method", 16, "<"),
+        Column("ARI", 9),
+        Column("NMI", 9),
+        Column("clusters", 10),
+        Column("noise", 8),
+    ]
+    ok_rows = [
+        [row["method"], f"{row['ari']:.4f}", f"{row['nmi']:.4f}", str(row["n_clusters"]), str(row["noise"])]
+        for row in clustering
+        if "error" not in row
+    ]
+    table = render_table(columns, ok_rows)
+    add("\n".join("  " + line for line in table.splitlines()))
     for row in clustering:
         if "error" in row:
             add(f"  {row['method']:<16}{'unavailable':>9}  {row['error']}")
-            continue
-        add(
-            f"  {row['method']:<16}{row['ari']:>9.4f}{row['nmi']:>9.4f}"
-            f"{row['n_clusters']:>10}{row['noise']:>8}"
-        )
     add("")
     add("  Scored against the 243 manual labels. These are reference points, not")
     add("  results: the semantic pipeline has to clear them to have said anything.")

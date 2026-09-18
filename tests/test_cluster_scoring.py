@@ -94,6 +94,21 @@ class TestLoadManualLabels:
         with pytest.raises(ValueError, match="lack a manual label"):
             load_manual_labels(path, ["T.A", "T.MISSING"])
 
+    def test_a_blank_label_in_the_csv_is_rejected_not_silently_scored(self, tmp_path):
+        """Delegating to ground_truth.load_manual_ground_truth closes a gap this
+        function used to have: a blank label used to pass through as "" instead
+        of being caught, and would have quietly scored as a wrong prediction."""
+        path = tmp_path / "labels.csv"
+        self._write(path, [["T", "A", "NUMBER", ""]])
+        with pytest.raises(ValueError, match="Empty label"):
+            load_manual_labels(path, ["T.A"])
+
+    def test_an_out_of_vocabulary_label_is_rejected(self, tmp_path):
+        path = tmp_path / "labels.csv"
+        self._write(path, [["T", "A", "NUMBER", "not_a_real_label"]])
+        with pytest.raises(ValueError, match="Invalid label"):
+            load_manual_labels(path, ["T.A"])
+
 
 class TestWritePerColumnCsv:
     def test_emits_one_row_per_column(self, tmp_path):

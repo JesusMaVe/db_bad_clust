@@ -42,7 +42,6 @@ Usage:
 
 from __future__ import annotations
 
-import pickle
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -50,6 +49,8 @@ from typing import Any
 
 import numpy as np
 
+from db_bad_clust.evaluation.experiments import Dataset, load_dataset
+from db_bad_clust.evaluation.report_table import Column, render_table
 from db_bad_clust.exceptions import BadDBError
 from db_bad_clust.generation.ground_truth import MANUAL_LABEL_VOCABULARY
 
@@ -138,26 +139,30 @@ def _table_column_counts(schema: Any) -> dict[str, int]:
     return {t.name: len(t.columns) for t in schema.tables}
 
 
-def build_raw_features(data: dict[str, Any], *, include_table_width: bool = True) -> np.ndarray:
-    """Concatenate e_text|e_type|e_rest|e_stat(|table width) at float64.
+def build_raw_features(dataset: Dataset, *, include_table_width: bool = True) -> np.ndarray:
+    """Concatenate e_text|e_type|e_rest|e_stat(|table width).
 
     Deliberately not FeatureBuilder.build(): that fusion's z-score/block-normalize
     statistics are computed from whatever matrix is passed to it, so its output is
     corpus-relative. Plain concatenation is portable between an independently-built
-    reference pickle and target pickle, as long as both were built with the same
-    --model/--semantic (build_embeddings.py).
+    reference dataset and target dataset, as long as both pickles were built with
+    the same --model/--semantic (build_embeddings.py). `dataset`'s blocks are
+    already float64 — `load_dataset` widens them once, on load.
 
     include_table_width appends log1p(number of columns in this column's table),
-    read from data["schema"] — see the module docstring on why giant_table needs it.
+    read from `dataset.schema` — see the module docstring on why giant_table
+    needs it. Raises BadDBError if requested but the pickle carried no schema.
     """
-    blocks = [
-        np.asarray(data[key], dtype=np.float64)
-        for key in ("e_text", "e_type", "e_rest", "e_stat")
-    ]
+    if include_table_width and dataset.schema is None:
+        raise BadDBError(
+            "include_table_width=True but this pickle has no 'schema' key — "
+            "rebuild it with scripts/build_embeddings.py, or pass include_table_width=False"
+        )
+    blocks = [dataset.e_text, dataset.e_type, dataset.e_rest, dataset.e_stat]
     if include_table_width:
-        counts = _table_column_counts(data["schema"])
+        counts = _table_column_counts(dataset.schema)
         widths = np.array(
-            [[np.log1p(counts[key.split(".", 1)[0]])] for key in data["column_index"]]
+            [[np.log1p(counts[key.split(".", 1)[0]])] for key in dataset.column_index]
         )
         blocks.append(widths)
     return np.hstack(blocks)
@@ -203,14 +208,11 @@ def fit_reference_model(
     from sklearn.ensemble import RandomForestClassifier
     from sklearn.model_selection import cross_val_predict, cross_val_score
 
-    from db_bad_clust.evaluation.cluster_scoring import load_manual_labels
+    dataset = load_dataset(pickle_path=reference_pickle, labels_path=labels_path)
+    column_index = dataset.column_index
+    truth = dataset.truth
 
-    with open(reference_pickle, "rb") as fh:
-        data = pickle.load(fh)
-    column_index: list[str] = data["column_index"]
-    truth = load_manual_labels(labels_path, column_index)
-
-    raw = build_raw_features(data, include_table_width=include_table_width)
+    raw = build_raw_features(dataset, include_table_width=include_table_width)
 
     clf = RandomForestClassifier(n_estimators=N_ESTIMATORS, class_weight="balanced", random_state=42)
 
@@ -326,9 +328,8 @@ def score_target(
     Raises BadDBError if the target's raw feature width does not match the model's
     training width — the two pickles must share --model/--semantic.
     """
-    with open(target_pickle, "rb") as fh:
-        data = pickle.load(fh)
-    raw = build_raw_features(data, include_table_width=model.include_table_width)
+    dataset = load_dataset(pickle_path=target_pickle, labels_path=None)
+    raw = build_raw_features(dataset, include_table_width=model.include_table_width)
     if raw.shape[1] != model.n_features:
         raise BadDBError(
             f"target feature width {raw.shape[1]} != reference training width "
@@ -340,7 +341,7 @@ def score_target(
     confidence = [float(row.max()) for row in proba]
 
     return _build_result(
-        column_index=data["column_index"],
+        column_index=dataset.column_index,
         predicted=predicted,
         confidence=confidence,
         label_support=model.label_support,
@@ -384,15 +385,20 @@ def format_health_report(result: HealthResult, folds: int = CV_FOLDS) -> str:
         by_label.setdefault(label, []).append(conf)
         penalty_by_label[label] = penalty_by_label.get(label, 0.0) + pen
 
-    add(f"{'label':<24} {'count':>6} {'mean severity':>14} {'mean confidence':>16}")
-    add("-" * 64)
+    label_columns = [
+        Column("label", 24, "<"),
+        Column("count", 6),
+        Column("mean severity", 14),
+        Column("mean confidence", 16),
+    ]
+    label_rows = []
     for label in sorted(by_label, key=lambda k: penalty_by_label[k], reverse=True):
         confs = np.array(by_label[label], dtype=np.float64)
         mean_conf = float(np.nanmean(confs)) if len(confs) else float("nan")
-        add(
-            f"{label:<24} {len(by_label[label]):>6} {SEVERITY[label]:>14} "
-            f"{mean_conf:>16.3f}"
+        label_rows.append(
+            [label, str(len(by_label[label])), str(SEVERITY[label]), f"{mean_conf:.3f}"]
         )
+    add(render_table(label_columns, label_rows))
     add("")
 
     if result.low_support_labels:

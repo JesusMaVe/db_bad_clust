@@ -142,16 +142,15 @@ def score(
 def load_manual_labels(path: str | Path, column_index: list[str]) -> list[str]:
     """Read manual_labels.csv into column_index order.
 
-    Raises if any column in the index lacks a label: a silently missing label
-    would be scored as a wrong prediction and quietly deflate every metric.
+    Reads and validates the CSV via `ground_truth.load_manual_ground_truth` — the
+    single place that owns "what counts as a valid label" (non-empty, in
+    MANUAL_LABEL_VOCABULARY) — and adds the one thing this caller needs beyond
+    that: every column in `column_index` must have a label. A silently missing
+    label would be scored as a wrong prediction and quietly deflate every metric.
     """
-    import csv
+    from db_bad_clust.generation.ground_truth import load_manual_ground_truth
 
-    with open(path, newline="") as fh:
-        by_key = {
-            f"{row['table']}.{row['column']}".upper(): row["label"].strip()
-            for row in csv.DictReader(fh)
-        }
+    by_key = load_manual_ground_truth(path)
     missing = [k for k in column_index if k.upper() not in by_key]
     if missing:
         raise ValueError(f"{len(missing)} columns lack a manual label, e.g. {missing[:3]}")

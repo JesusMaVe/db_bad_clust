@@ -21,6 +21,7 @@ from __future__ import annotations
 import pickle
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
@@ -30,6 +31,7 @@ from db_bad_clust.evaluation.cluster_scoring import (
     load_manual_labels,
     score,
 )
+from db_bad_clust.evaluation.report_table import Column, render_table
 
 # Structure only: alpha=0 switches the embeddings off. This is the reference
 # the semantic component has to beat, and the configuration the project was
@@ -48,21 +50,31 @@ GIANT_TABLES = frozenset({"TABLA_BASE_DATOS", "BACKUP_DATOS"})
 
 @dataclass
 class Dataset:
-    """The four feature blocks plus the ground truth, all in one column order."""
+    """The four feature blocks, all in one column order.
+
+    `truth` is optional: a labeled reference corpus carries it, but a target
+    database being scored by `evaluation.health_report` has none — the pipeline
+    up to this point (extraction, documents, embeddings) never needed labels
+    (see `load_dataset`), and this dataclass is the single place that loading
+    happens, so it should not force a label that isn't there.
+
+    `schema` is the raw `DatabaseSchema` from the pickle, when present — needed
+    by callers that read table-level metadata (e.g. `health_report.py`'s
+    per-table column count), not by the clustering/scoring path itself.
+    """
 
     e_text: np.ndarray
     e_type: np.ndarray
     e_rest: np.ndarray
     e_stat: np.ndarray
     column_index: list[str]
-    truth: list[str]
+    truth: list[str] | None = None
+    schema: Any = None
 
     def __post_init__(self) -> None:
-        lengths = {
-            len(self.column_index),
-            len(self.truth),
-            *(b.shape[0] for b in self.blocks),
-        }
+        lengths = {len(self.column_index), *(b.shape[0] for b in self.blocks)}
+        if self.truth is not None:
+            lengths.add(len(self.truth))
         if len(lengths) != 1:
             raise ValueError(f"every block must have the same number of rows, got {sorted(lengths)}")
 
@@ -88,7 +100,8 @@ class Dataset:
             e_rest=self.e_rest[keep],
             e_stat=self.e_stat[keep],
             column_index=[self.column_index[i] for i in keep],
-            truth=[self.truth[i] for i in keep],
+            truth=[self.truth[i] for i in keep] if self.truth is not None else None,
+            schema=self.schema,
         )
 
 
@@ -103,9 +116,15 @@ class Evaluation:
 
 def load_dataset(
     pickle_path: str | Path = "output/intermediate_02.pkl",
-    labels_path: str | Path = "output/manual_labels.csv",
+    labels_path: str | Path | None = "output/manual_labels.csv",
 ) -> Dataset:
-    """Read the stored feature blocks and pair them with the manual labels.
+    """Read the stored feature blocks, optionally paired with the manual labels.
+
+    This is the one place a build_embeddings.py-shaped pickle gets opened and
+    its blocks widened to float64 — every other reader of these pickles
+    (ml_baselines.py, evaluation/health_report.py) goes through this function
+    rather than re-opening the file, so the float64 pin below applies
+    everywhere a pickle is read, not just here.
 
     The blocks are stored as float32 (BERT's output dtype) and are widened to
     float64 here on purpose: with a degenerate structural representation the
@@ -113,17 +132,23 @@ def load_dataset(
     structure-only ARI by 0.3154 (see `precision_sensitivity`). Pinning the
     working width makes every reported number reproducible; the narrow width
     stays available as a diagnostic rather than as an accident.
+
+    labels_path=None skips loading ground truth — the extraction/embedding
+    pipeline never needed labels to begin with (see CLAUDE.md), and a target
+    database being scored by health_report.py has none to load.
     """
     with open(pickle_path, "rb") as fh:
         data = pickle.load(fh)
     column_index: list[str] = data["column_index"]
+    truth = load_manual_labels(labels_path, column_index) if labels_path is not None else None
     return Dataset(
         e_text=np.asarray(data["e_text"], dtype=np.float64),
         e_type=np.asarray(data["e_type"], dtype=np.float64),
         e_rest=np.asarray(data["e_rest"], dtype=np.float64),
         e_stat=np.asarray(data["e_stat"], dtype=np.float64),
         column_index=column_index,
-        truth=load_manual_labels(labels_path, column_index),
+        truth=truth,
+        schema=data.get("schema"),
     )
 
 
@@ -392,27 +417,42 @@ def format_diagnostics(configs: dict[str, tuple[Dataset, dict[str, float]]]) -> 
     configuration that fails the first will usually fail the second, because
     tied points leave the clustering to be settled by rounding.
     """
-    lines = [
-        "Can this representation say anything?",
-        "-" * 76,
-        f"{'Configuration':<28} {'distinct':>12} {'duplicated':>11} {'largest tie':>12}",
+    degeneracy_columns = [
+        Column("Configuration", 28, "<"),
+        Column("distinct", 12),
+        Column("duplicated", 11),
+        Column("largest tie", 12),
     ]
+    degeneracy_rows = []
     for name, (dataset, weights) in configs.items():
         d = representation_degeneracy(dataset, weights)
-        lines.append(
-            f"{name:<28} {d['n_distinct']:>5}/{d['n_columns']:<6} "
-            f"{d['duplicate_fraction']:>10.0%} {d['largest_tie_group']:>12}"
+        degeneracy_rows.append(
+            [
+                name,
+                f"{d['n_distinct']}/{d['n_columns']}",
+                f"{d['duplicate_fraction']:.0%}",
+                str(d["largest_tie_group"]),
+            ]
         )
-    lines += [
-        "",
-        f"{'Configuration':<28} {'ARI float32':>12} {'ARI float64':>12} {'gap':>12}",
+
+    precision_columns = [
+        Column("Configuration", 28, "<"),
+        Column("ARI float32", 12),
+        Column("ARI float64", 12),
+        Column("gap", 12),
     ]
+    precision_rows = []
     for name, (dataset, weights) in configs.items():
         p = precision_sensitivity(dataset, weights)
-        lines.append(
-            f"{name:<28} {p['ari_float32']:>12.4f} {p['ari_float64']:>12.4f} {p['gap']:>12.4f}"
+        precision_rows.append(
+            [name, f"{p['ari_float32']:.4f}", f"{p['ari_float64']:.4f}", f"{p['gap']:.4f}"]
         )
-    lines += [
+
+    lines = [
+        "Can this representation say anything?",
+        render_table(degeneracy_columns, degeneracy_rows),
+        "",
+        render_table(precision_columns, precision_rows),
         "",
         "Columns that share a vector cannot be given different labels by any",
         "algorithm, and a gap between the two precisions is the part of the score",
@@ -421,19 +461,37 @@ def format_diagnostics(configs: dict[str, tuple[Dataset, dict[str, float]]]) -> 
     return "\n".join(lines)
 
 
+TABLE_SCORE_COLUMNS = [
+    Column("Configuration", 28, "<"),
+    Column("ARI", 8),
+    Column("NMI", 8),
+    Column("AMI", 8),
+    Column("V", 8),
+    Column("Accuracy", 9),
+    Column("F1-macro", 9),
+    Column("k", 4),
+]
+
+
 def format_table(rows: list[ClusterScore]) -> str:
     """Render scored configurations as one comparable table."""
-    lines = [
-        f"{'Configuration':<28} {'ARI':>8} {'NMI':>8} {'AMI':>8} {'V':>8} "
-        f"{'Accuracy':>9} {'F1-macro':>9} {'k':>4}",
-        "-" * 92,
-    ]
-    lines += [
-        f"{r.name:<28} {r.ari:>8.4f} {r.nmi:>8.4f} {r.ami:>8.4f} {r.v_measure:>8.4f} "
-        f"{r.accuracy:>9.4f} {r.f1_macro:>9.4f} {r.n_groups:>4}"
+    table_rows = [
+        [
+            r.name,
+            f"{r.ari:.4f}",
+            f"{r.nmi:.4f}",
+            f"{r.ami:.4f}",
+            f"{r.v_measure:.4f}",
+            f"{r.accuracy:.4f}",
+            f"{r.f1_macro:.4f}",
+            str(r.n_groups),
+        ]
         for r in rows
     ]
-    lines.append("")
-    lines.append("Accuracy/F1 use ground-truth-assisted cluster naming — an upper bound.")
-    lines.append("AMI, not NMI, is the one to compare across rows with different k.")
+    lines = [
+        render_table(TABLE_SCORE_COLUMNS, table_rows),
+        "",
+        "Accuracy/F1 use ground-truth-assisted cluster naming — an upper bound.",
+        "AMI, not NMI, is the one to compare across rows with different k.",
+    ]
     return "\n".join(lines)
