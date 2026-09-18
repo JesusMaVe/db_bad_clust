@@ -266,6 +266,7 @@ def run_clustering(
     normalize: str = "block",
     n_components: int = PCA_COMPONENTS,
     reducer: str = "pca",
+    reducer_kwargs: dict[str, Any] | None = None,
     min_cluster_size: int = HDBSCAN_MIN_CLUSTER_SIZE,
     min_samples: int | None = HDBSCAN_MIN_SAMPLES,
     metric: str = "euclidean",
@@ -276,6 +277,7 @@ def run_clustering(
         build_phi(dataset, weights, normalize=normalize),
         n_components=n_components,
         reducer=reducer,
+        reducer_kwargs=reducer_kwargs,
         min_cluster_size=min_cluster_size,
         min_samples=min_samples,
         metric=metric,
@@ -287,12 +289,20 @@ def _cluster(
     phi: np.ndarray,
     n_components: int = PCA_COMPONENTS,
     reducer: str = "pca",
+    reducer_kwargs: dict[str, Any] | None = None,
     min_cluster_size: int = HDBSCAN_MIN_CLUSTER_SIZE,
     min_samples: int | None = HDBSCAN_MIN_SAMPLES,
     metric: str = "euclidean",
     cluster_selection_method: str = "eom",
 ) -> np.ndarray:
-    """Reduce an already-fused matrix and cluster it."""
+    """Reduce an already-fused matrix and cluster it.
+
+    `reducer_kwargs` reaches `DimensionalityReducer` unchanged — e.g.
+    `{"n_neighbors": 10, "min_dist": 0.0}` for `reducer="umap"`. Without it,
+    UMAP silently runs on defaults tuned in the reducer for much larger
+    datasets than this corpus (see docs/research_improving_clustering.md,
+    Tema 3.2).
+    """
     from db_bad_clust.clustering.cluster_engine import ClusterEngine
     from db_bad_clust.clustering.dimensionality_reducer import DimensionalityReducer
 
@@ -300,6 +310,7 @@ def _cluster(
         method=reducer,
         n_components=min(n_components, *phi.shape),
         random_state=42,
+        **(reducer_kwargs or {}),
     ).fit_transform(phi)
 
     return ClusterEngine(
@@ -316,6 +327,7 @@ def _score_phi(
     dataset: Dataset,
     n_components: int = PCA_COMPONENTS,
     reducer: str = "pca",
+    reducer_kwargs: dict[str, Any] | None = None,
     min_cluster_size: int = HDBSCAN_MIN_CLUSTER_SIZE,
     min_samples: int | None = HDBSCAN_MIN_SAMPLES,
     metric: str = "euclidean",
@@ -326,6 +338,7 @@ def _score_phi(
         phi,
         n_components=n_components,
         reducer=reducer,
+        reducer_kwargs=reducer_kwargs,
         min_cluster_size=min_cluster_size,
         min_samples=min_samples,
         metric=metric,

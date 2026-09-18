@@ -98,6 +98,20 @@ class TestRunClustering:
         leaf = run_clustering(data, weights, cluster_selection_method="leaf")
         assert eom.shape == leaf.shape == (40,)
 
+    def test_reducer_kwargs_reach_the_reducer(self):
+        """UMAP's n_neighbors/min_dist must actually change with the corpus,
+        not silently keep the reducer's own large-dataset defaults."""
+        data = _dataset(40)
+        weights = {"alpha": 0.25, "beta": 0.25, "gamma": 0.25, "delta": 0.25}
+        labels = run_clustering(
+            data,
+            weights,
+            reducer="umap",
+            reducer_kwargs={"n_neighbors": 5, "min_dist": 0.0},
+            min_cluster_size=5,
+        )
+        assert labels.shape == (40,)
+
     def test_separable_groups_are_found(self):
         """Two clouds 5 sigma apart must not be merged into one cluster."""
         data = _dataset(40)

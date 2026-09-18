@@ -210,6 +210,44 @@ Hallazgos:
   borraron tras la comparación — están gitignored y el hallazgo (negativo) ya quedó documentado
   aquí, no hacía falta conservarlos.
 
+### Resultado medido del candidato #3 (2026-09-18)
+
+Implementado: `evaluation/experiments.py::run_clustering`/`_cluster`/`_score_phi` ganan un
+parámetro `reducer_kwargs: dict | None`, enhebrado a `DimensionalityReducer(...,
+**reducer_kwargs)`. Sin esto, `reducer="umap"` ya era seleccionable pero corría siempre con los
+defaults del reductor (`n_neighbors=15, min_dist=0.1`, pensados para datasets mucho más grandes
+— Tema 3.2), sin forma de pasarle `min_dist=0.0` ni un `n_neighbors` bajo desde el harness de
+experimentos.
+
+Barrido sobre la representación documento (α=1.00), `min_dist=0.0` fijo, `n_neighbors` ∈
+{5, 10, 15} × salida de UMAP a 20 o 2 dimensiones, evaluación honesta (sin gigantes):
+
+| reducer                    |    ARI |    NMI |    AMI | Accuracy | F1-macro |  k |
+| --------------------------- | -----: | -----: | -----: | -------: | -------: | -: |
+| **pca (actual, n=20)**       | 0.1107 | 0.3781 | 0.2497 |   0.6797 |   0.4003 | 17 |
+| umap nn=5, d=20              | 0.0569 | 0.3579 | 0.2142 |   0.6536 |   0.3835 | 19 |
+| umap nn=5, d=2                | 0.0505 | 0.3452 | 0.1987 |   0.6340 |   0.3745 | 19 |
+| umap nn=10, d=20              | 0.0508 | 0.3457 | 0.1994 |   0.6340 |   0.3745 | 19 |
+| umap nn=10, d=2               | 0.0454 | 0.3306 | 0.1862 |   0.6144 |   0.3675 | 18 |
+| umap nn=15, d=20              | 0.0533 | 0.3485 | 0.2025 |   0.6471 |   0.3808 | 19 |
+| umap nn=15, d=2 (mejor UMAP)   | 0.0685 | 0.3766 | 0.2368 |   0.6732 |   0.3919 | 19 |
+
+En el corpus completo la brecha es aún mayor: PCA ARI 0.3861 vs el mejor UMAP (nn=15, d=2)
+ARI 0.1553.
+
+Hallazgos:
+
+- **PCA le gana a las siete configuraciones de UMAP probadas**, en ambas evaluaciones. Ninguna
+  combinación de `n_neighbors`/dimensión de salida se acerca al baseline actual.
+- Esto confirma en la práctica el caveat que la propia documentación de UMAP ya daba por
+  adelantado (Tema 3): la combinación UMAP+HDBSCAN es "algo controvertida" porque UMAP no
+  preserva bien la densidad, justo la propiedad de la que depende un algoritmo basado en
+  densidad como HDBSCAN. Sobre 153-243 puntos (muy por debajo de la escala en la que la propia
+  guía de UMAP da sus ejemplos), el efecto es claramente negativo, no neutro.
+- **Sin cambios al default**: `reducer="pca"` se queda. `reducer_kwargs` se conserva en el código
+  (sin costo, no-op si no se pasa) como infraestructura para futuros barridos de UMAP u otro
+  reductor no lineal, sin tener que volver a tocar `experiments.py`.
+
 ---
 
 ## Referencias
