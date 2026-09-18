@@ -50,6 +50,9 @@ class FeatureBuilder:
       beta (data type)       = 0.30  — data type weight
       gamma (constraints)    = 0.25  — constraint weight
       delta (statistical)    = 0.05  — statistical feature weight (data_length)
+      epsilon (table aggs)   = 0.00  — per-table aggregate weight, off by default;
+                                        see features/table_aggregates.py. Zero-weighted
+                                        but present blocks are harmless (see `build`).
 
     Args:
       normalize: "block" (default) scales every block to unit total variance
@@ -66,6 +69,7 @@ class FeatureBuilder:
         beta: float = 0.30,
         gamma: float = 0.25,
         delta: float = 0.05,
+        epsilon: float = 0.0,
         normalize: str = "block",
     ) -> None:
         if normalize not in self.VALID_NORMALIZERS:
@@ -76,6 +80,7 @@ class FeatureBuilder:
         self.beta = beta
         self.gamma = gamma
         self.delta = delta
+        self.epsilon = epsilon
         self.normalize = normalize
         self._fitted = False
 
@@ -127,6 +132,7 @@ class FeatureBuilder:
         e_type: np.ndarray,
         e_rest: np.ndarray,
         e_stat: np.ndarray | None = None,
+        e_table: np.ndarray | None = None,
     ) -> np.ndarray:
         """
         Build the composite vector φ(aⱼ).
@@ -136,9 +142,11 @@ class FeatureBuilder:
             e_type: One-hot types              shape (N, n_types)
             e_rest: Binary constraints         shape (N, 5)
             e_stat: Statistical (optional)     shape (N, s)
+            e_table: Per-table aggregates (optional), weighted by epsilon —
+                see features/table_aggregates.py. shape (N, 5)
 
         Returns:
-            numpy array shape (N, d) where d = d_text + n_types + 5 + (s or 0)
+            numpy array shape (N, d) where d = d_text + n_types + 5 + (s or 0) + (5 or 0)
         """
         assert e_text.shape[0] == e_type.shape[0] == e_rest.shape[0], (
             "All matrices must have the same number of rows"
@@ -162,6 +170,11 @@ class FeatureBuilder:
             e_stat_w = self.delta * e_stat_norm
             components.append(e_stat_w)
 
+        if e_table is not None:
+            e_table_norm = self._normalize(e_table)
+            e_table_w = self.epsilon * e_table_norm
+            components.append(e_table_w)
+
         phi = np.concatenate(components, axis=1)
 
         self._fitted = True
@@ -182,6 +195,7 @@ class FeatureBuilder:
             "beta": self.beta,
             "gamma": self.gamma,
             "delta": self.delta,
+            "epsilon": self.epsilon,
         }
 
     @property

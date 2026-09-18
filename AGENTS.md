@@ -159,13 +159,31 @@ el 0.5031 de α=0 no es lo que parece.
   eso ARI/AMI no mejoran). `--mismatch` queda como flag opcional (por defecto `False`) en vez de
   comportamiento por defecto, precisamente porque no es una mejora limpia.
 
+- **Bloque de features agregadas por tabla (`features/table_aggregates.py`, peso `epsilon` en
+  `FeatureBuilder`) — mejora real pero modesta, y con un riesgo de fuga documentado, por eso
+  queda opt-in.** `giant_table`/`eav`/`polymorphic` son propiedades de tabla que ningún embedding
+  por columna puede ver solo; `load_dataset` calcula 5 estadísticas puramente estructurales por
+  tabla (log1p(nº columnas), % nullable, diversidad de tipos, % nombres genéricos, % con
+  comentario de columna) y se las adjunta a cada una de sus columnas — sin nombre de tabla, sin
+  reglas. Barrido de `epsilon` sobre el documento (α=1.00), sin gigantes: pico en
+  `epsilon≈0.25-0.30` (ARI 0.1107→0.1158, y mejora en las cinco métricas), cae por debajo del
+  baseline pasado `epsilon≈0.35`. **Riesgo medido, no solo teórico:** de las 23 tablas, el vector
+  agregado de 5 dimensiones es distinto en 21 — casi tan identificador como el nombre de tabla en
+  sí. Tranquilizador parcialmente: la mejora se mide en `--without-giants`, que ya excluye las dos
+  tablas cuyo "atajo" de identidad es el que preocupa (`TABLA_BASE_DATOS`/`BACKUP_DATOS`), así que
+  no viene de re-identificarlas a ellas — pero no se descarta que otra parte de la mejora sea el
+  mismo atajo aplicado a otras tablas. `epsilon` se queda en 0.0 por defecto (ningún peso
+  existente lo incluye, así que ningún experimento existente cambia); disponible para quien quiera
+  seguir explorándolo vía `evaluate(..., {"epsilon": 0.25, ...})`. Ver
+  `docs/research_improving_clustering.md`, candidato #4.
+
 - **Nunca sobrescribas `output/intermediate_02.pkl`.** Es el baseline histórico; un experimento
   que sobrescribe su propio baseline no se puede comprobar.
 
 ## Tests y lint
 
 ```bash
-.venv/bin/python -m pytest tests/ -v      # 372 tests, sin BD y sin descargar el modelo
+.venv/bin/python -m pytest tests/ -v      # 423 tests, sin BD y sin descargar el modelo
 .venv/bin/python -m ruff check src tests scripts   # lint-clean
 ```
 

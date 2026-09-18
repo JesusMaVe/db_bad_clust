@@ -66,6 +66,13 @@ class Dataset:
     `schema` is the raw `DatabaseSchema` from the pickle, when present — needed
     by callers that read table-level metadata (e.g. `health_report.py`'s
     per-table column count), not by the clustering/scoring path itself.
+
+    `e_table` is the per-table aggregate block (features/table_aggregates.py),
+    computed once by `load_dataset` from `schema` — pure computation, no need
+    to touch Oracle/BERT or regenerate any pickle. `build_phi` passes it to
+    `FeatureBuilder` alongside epsilon; every existing weights dict lacks an
+    "epsilon" key, so it defaults to 0.0 and this block contributes nothing
+    unless a caller explicitly asks for it.
     """
 
     e_text: np.ndarray
@@ -75,11 +82,14 @@ class Dataset:
     column_index: list[str]
     truth: list[str] | None = None
     schema: Any = None
+    e_table: np.ndarray | None = None
 
     def __post_init__(self) -> None:
         lengths = {len(self.column_index), *(b.shape[0] for b in self.blocks)}
         if self.truth is not None:
             lengths.add(len(self.truth))
+        if self.e_table is not None:
+            lengths.add(self.e_table.shape[0])
         if len(lengths) != 1:
             raise ValueError(f"every block must have the same number of rows, got {sorted(lengths)}")
 
@@ -107,6 +117,7 @@ class Dataset:
             column_index=[self.column_index[i] for i in keep],
             truth=[self.truth[i] for i in keep] if self.truth is not None else None,
             schema=self.schema,
+            e_table=self.e_table[keep] if self.e_table is not None else None,
         )
 
 
@@ -146,6 +157,12 @@ def load_dataset(
         data = pickle.load(fh)
     column_index: list[str] = data["column_index"]
     truth = load_manual_labels(labels_path, column_index) if labels_path is not None else None
+    schema = data.get("schema")
+    e_table = None
+    if schema is not None:
+        from db_bad_clust.features.table_aggregates import build_table_block
+
+        e_table = build_table_block(schema, column_index)
     return Dataset(
         e_text=np.asarray(data["e_text"], dtype=np.float64),
         e_type=np.asarray(data["e_type"], dtype=np.float64),
@@ -153,7 +170,8 @@ def load_dataset(
         e_stat=np.asarray(data["e_stat"], dtype=np.float64),
         column_index=column_index,
         truth=truth,
-        schema=data.get("schema"),
+        schema=schema,
+        e_table=e_table,
     )
 
 
@@ -175,6 +193,7 @@ def build_phi(
         e_type=dataset.e_type,
         e_rest=dataset.e_rest,
         e_stat=dataset.e_stat,
+        e_table=dataset.e_table,
     )
 
 
@@ -249,6 +268,7 @@ def precision_sensitivity(
             e_stat=dataset.e_stat.astype(dtype),
             column_index=dataset.column_index,
             truth=dataset.truth,
+            e_table=dataset.e_table.astype(dtype) if dataset.e_table is not None else None,
         )
         phi = build_phi(cast, weights, normalize=normalize).astype(dtype)
         scores[name] = _score_phi(phi, cast, **kwargs).ari

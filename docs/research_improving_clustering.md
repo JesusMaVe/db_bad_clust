@@ -248,6 +248,60 @@ Hallazgos:
   (sin costo, no-op si no se pasa) como infraestructura para futuros barridos de UMAP u otro
   reductor no lineal, sin tener que volver a tocar `experiments.py`.
 
+### Resultado medido del candidato #4 (2026-09-18)
+
+Implementado: nuevo módulo `features/table_aggregates.py` (`build_table_block(schema,
+column_index) -> (N,5)`: log1p(nº columnas), % nullable, diversidad de tipos, % nombres
+genéricos, % con comentario de columna — todo calculado desde la estructura, sin nombre de tabla
+ni reglas escritas a mano). `FeatureBuilder` gana un quinto bloque opcional `e_table` con peso
+`epsilon` (default 0.0, mismo patrón que `e_stat`/`delta`: presente pero con contribución cero si
+no se pide). `Dataset`/`load_dataset` calculan `e_table` automáticamente desde `schema` — que ya
+vive en todos los pickles existentes — así que ningún pickle necesitó regenerarse.
+
+**Chequeo de degeneración obligatorio (Tema 5.2) antes de confiar en cualquier número:** de las
+23 tablas del corpus reconstruido, el vector agregado de 5 dimensiones es **distinto en 21** —
+solo 2 colisiones exactas (`AUDITORIA_LOG`≡`EMPLEADOS_HISTORIAL`, `CATEGORIAS`≡`METADATA`). Esto
+es casi tan identificador como el nombre de tabla mismo — el riesgo que este mismo documento
+advertía por adelantado. Dato a favor: `BACKUP_DATOS` y `TABLA_BASE_DATOS` (las dos gigantes)
+quedan con vectores casi idénticos entre sí por razones estructurales genuinas (muchas columnas,
+casi todas nullable, tipos poco diversos, nombres genéricos, cero comentarios) — exactamente la
+señal que este candidato buscaba, no una coincidencia de identidad.
+
+Barrido de `epsilon` sobre la representación documento (α=1.00), evaluación honesta (sin
+gigantes):
+
+| epsilon |    ARI |    NMI |    AMI | Accuracy | F1-macro |  k |
+| ------- | -----: | -----: | -----: | -------: | -------: | -: |
+| 0.00 (baseline) | 0.1107 | 0.3781 | 0.2497 |   0.6797 |   0.4003 | 17 |
+| 0.10    | 0.1028 | 0.3681 | 0.2375 |   0.6667 |   0.3639 | 17 |
+| 0.15    | 0.1134 | 0.3886 | 0.2624 |   0.6797 |   0.3782 | 17 |
+| 0.20    | 0.1054 | 0.3807 | 0.2527 |   0.6797 |   0.3934 | 17 |
+| **0.25**| **0.1158** | **0.3925** | **0.2670** | **0.6863** | **0.4040** | 17 |
+| 0.30    | 0.1158 | 0.3925 | 0.2670 |   0.6863 |   0.4040 | 17 |
+| 0.35    | 0.1042 | 0.3728 | 0.2429 |   0.6732 |   0.3760 | 17 |
+| 0.40    | 0.1032 | 0.3673 | 0.2360 |   0.6667 |   0.3617 | 17 |
+
+Hallazgos:
+
+- **Mejora real pero modesta**: `epsilon≈0.25-0.30` gana en las cinco métricas frente al
+  baseline sin bloque de tabla (ARI +0.0051, ~4.6% relativo — mucho más chico que la mejora del
+  candidato #1). Es un pico genuino, no ruido: sube de forma monótona hasta 0.25-0.30 y vuelve a
+  bajar después, con una meseta plana exactamente en el óptimo (0.25 y 0.30 dan el mismo
+  resultado).
+- **La mejora no puede venir de re-identificar las dos tablas gigantes** — están excluidas de
+  esta evaluación (`--without-giants`) — así que lo que sea que epsilon aporta viene de las otras
+  21 tablas, no de las dos cuyo riesgo de fuga ya estaba medido. Eso no descarta que parte de la
+  mejora sea el mismo mecanismo de fuga aplicado a otro par de tablas (p. ej. `AUDITORIA_LOG`/
+  `EMPLEADOS_HISTORIAL`, que colisionan exactamente) — no se investigó eso a más profundidad.
+- **Decisión: `epsilon` se queda en 0.0 por defecto, no se adopta como nuevo default.** Mismo
+  criterio que `--mismatch` (AGENTS.md): una mejora real pero pequeña, sobre un bloque con un
+  riesgo de fuga de identidad ya medido y no completamente descartado, no debe volverse
+  comportamiento por defecto silencioso. Queda disponible vía la librería
+  (`evaluate(nombre, dataset, {"alpha":1.0,...,"epsilon":0.25})`) para quien quiera seguir
+  investigando esta dirección — por ejemplo, separando qué columnas específicas cambian de
+  cluster al subir epsilon, para confirmar si son realmente columnas `giant_table`/`eav`/
+  `polymorphic` las que se benefician, o si el efecto es más difuso.
+
 ---
 
 ## Referencias

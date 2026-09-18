@@ -62,6 +62,13 @@ def small_statistical() -> np.ndarray:
     return np.random.randn(5, 1).astype(np.float32)
 
 
+@pytest.fixture
+def small_table_aggregates() -> np.ndarray:
+    """Per-table aggregate features: 5 samples, 5 features."""
+    np.random.seed(4)
+    return np.random.randn(5, 5).astype(np.float64)
+
+
 # ── Output shapes ───────────────────────────────────────────────────────
 
 
@@ -185,7 +192,13 @@ class TestWeightApplication:
     """Verify weights are correctly applied."""
 
     def test_default_weights(self, builder: FeatureBuilder) -> None:
-        assert builder.weights == {"alpha": 0.40, "beta": 0.30, "gamma": 0.25, "delta": 0.05}
+        assert builder.weights == {
+            "alpha": 0.40,
+            "beta": 0.30,
+            "gamma": 0.25,
+            "delta": 0.05,
+            "epsilon": 0.0,
+        }
 
     def test_alpha_zero(
         self,
@@ -238,6 +251,54 @@ class TestWeightApplication:
         # Last 1 column should be all zeros
         assert np.allclose(phi[:, -1:], 0.0, atol=1e-6)
 
+    def test_epsilon_zero_e_table_present_still_zero_contribution(
+        self,
+        small_embeddings: np.ndarray,
+        small_type_encoding: np.ndarray,
+        small_constraint_encoding: np.ndarray,
+        small_table_aggregates: np.ndarray,
+    ) -> None:
+        """epsilon=0 (the default) means the table-aggregate block is present in
+        phi's shape (matching e_stat's existing always-append-if-not-None
+        behaviour) but contributes nothing — a genuine no-op for every existing
+        caller that never passes e_table."""
+        builder = FeatureBuilder(alpha=0.4, beta=0.3, gamma=0.25, epsilon=0.0)
+        phi = builder.build(
+            small_embeddings,
+            small_type_encoding,
+            small_constraint_encoding,
+            e_table=small_table_aggregates,
+        )
+        assert phi.shape == (5, 768 + 12 + 5 + 5)
+        assert np.allclose(phi[:, -5:], 0.0, atol=1e-6)
+
+    def test_epsilon_nonzero_e_table_contributes(
+        self,
+        small_embeddings: np.ndarray,
+        small_type_encoding: np.ndarray,
+        small_constraint_encoding: np.ndarray,
+        small_table_aggregates: np.ndarray,
+    ) -> None:
+        builder = FeatureBuilder(alpha=0.4, beta=0.3, gamma=0.25, epsilon=0.5)
+        phi = builder.build(
+            small_embeddings,
+            small_type_encoding,
+            small_constraint_encoding,
+            e_table=small_table_aggregates,
+        )
+        assert not np.allclose(phi[:, -5:], 0.0, atol=1e-6)
+
+    def test_e_table_omitted_shape_unaffected(
+        self,
+        small_embeddings: np.ndarray,
+        small_type_encoding: np.ndarray,
+        small_constraint_encoding: np.ndarray,
+    ) -> None:
+        """Callers that never pass e_table (every existing one) see no shape change."""
+        builder = FeatureBuilder(alpha=0.4, beta=0.3, gamma=0.25)
+        phi = builder.build(small_embeddings, small_type_encoding, small_constraint_encoding)
+        assert phi.shape == (5, 768 + 12 + 5)
+
     def test_custom_weights(
         self,
         small_embeddings: np.ndarray,
@@ -246,7 +307,13 @@ class TestWeightApplication:
     ) -> None:
         """Custom weight values are reflected in the builder."""
         builder = FeatureBuilder(alpha=0.7, beta=0.2, gamma=0.1)
-        assert builder.weights == {"alpha": 0.7, "beta": 0.2, "gamma": 0.1, "delta": 0.05}
+        assert builder.weights == {
+            "alpha": 0.7,
+            "beta": 0.2,
+            "gamma": 0.1,
+            "delta": 0.05,
+            "epsilon": 0.0,
+        }
         phi = builder.build(small_embeddings, small_type_encoding, small_constraint_encoding)
         assert phi.shape == (5, 785)
 
