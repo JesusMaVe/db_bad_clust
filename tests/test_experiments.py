@@ -88,6 +88,16 @@ class TestRunClustering:
         second = run_clustering(data, weights)
         assert np.array_equal(first, second)
 
+    def test_cluster_selection_method_is_forwarded_to_hdbscan(self):
+        """leaf vs eom must reach ClusterEngine, not be accepted and dropped —
+        the same failure mode NormalizeIsHonoured guards against for alpha."""
+        data = _dataset(40)
+        weights = {"alpha": 0.25, "beta": 0.25, "gamma": 0.25, "delta": 0.25}
+        # Both must run without error and return one label per column.
+        eom = run_clustering(data, weights, cluster_selection_method="eom")
+        leaf = run_clustering(data, weights, cluster_selection_method="leaf")
+        assert eom.shape == leaf.shape == (40,)
+
     def test_separable_groups_are_found(self):
         """Two clouds 5 sigma apart must not be merged into one cluster."""
         data = _dataset(40)

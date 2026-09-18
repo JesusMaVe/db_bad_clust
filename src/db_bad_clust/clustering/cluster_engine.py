@@ -256,12 +256,18 @@ class ClusterEngine:
         cluster_selection_epsilon: float = self.kwargs.get(
             "cluster_selection_epsilon", 0.0
         )
+        # "eom" (Excess of Mass) is hdbscan's own default: a few large clusters
+        # plus some small ones. "leaf" selects the leaf nodes of the condensed
+        # tree instead, producing more, finer, more homogeneous clusters — see
+        # https://hdbscan.readthedocs.io/en/latest/parameter_selection.html
+        cluster_selection_method: str = self.kwargs.get("cluster_selection_method", "eom")
 
         self._model = _hdbscan.HDBSCAN(
             min_cluster_size=min_cluster_size,
             min_samples=min_samples,
             metric=metric,
             cluster_selection_epsilon=cluster_selection_epsilon,
+            cluster_selection_method=cluster_selection_method,
             gen_min_span_tree=True,
             prediction_data=True,
         )
@@ -270,12 +276,13 @@ class ClusterEngine:
         n_clusters_found = len(set(labels)) - (1 if -1 in labels else 0)
         logger.info(
             "HDBSCAN: %s samples -> %s clusters + %s outliers "
-            "(min_cluster_size=%s, metric=%s)",
+            "(min_cluster_size=%s, metric=%s, cluster_selection_method=%s)",
             X.shape[0],
             n_clusters_found,
             n_noise,
             min_cluster_size,
             metric,
+            cluster_selection_method,
         )
         return labels.astype(int)
 

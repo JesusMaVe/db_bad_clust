@@ -38,9 +38,14 @@ from db_bad_clust.evaluation.report_table import Column, render_table
 # tuned to before the fusion was corrected.
 STRUCTURE_ONLY = {"alpha": 0.00, "beta": 0.35, "gamma": 0.45, "delta": 0.20}
 
+# min_samples=3 beats the previous default of 2 on every metric (ARI/NMI/AMI/
+# accuracy/F1-macro) on the honest without-giants evaluation, and is a wash on
+# the full corpus — measured via a grid sweep against cluster_selection_method
+# too (eom vs leaf made no difference at this corpus size). See
+# docs/research_improving_clustering.md, candidato #1.
 PCA_COMPONENTS = 20
 HDBSCAN_MIN_CLUSTER_SIZE = 5
-HDBSCAN_MIN_SAMPLES = 2
+HDBSCAN_MIN_SAMPLES = 3
 
 # The two tables that alone supply every `giant_table` label (90 of 243
 # columns). Excluding them isolates the anti-patterns a per-column encoder can
@@ -264,6 +269,7 @@ def run_clustering(
     min_cluster_size: int = HDBSCAN_MIN_CLUSTER_SIZE,
     min_samples: int | None = HDBSCAN_MIN_SAMPLES,
     metric: str = "euclidean",
+    cluster_selection_method: str = "eom",
 ) -> np.ndarray:
     """Fuse the blocks, reduce, cluster. Returns raw cluster ids (-1 = noise)."""
     return _cluster(
@@ -273,6 +279,7 @@ def run_clustering(
         min_cluster_size=min_cluster_size,
         min_samples=min_samples,
         metric=metric,
+        cluster_selection_method=cluster_selection_method,
     )
 
 
@@ -283,6 +290,7 @@ def _cluster(
     min_cluster_size: int = HDBSCAN_MIN_CLUSTER_SIZE,
     min_samples: int | None = HDBSCAN_MIN_SAMPLES,
     metric: str = "euclidean",
+    cluster_selection_method: str = "eom",
 ) -> np.ndarray:
     """Reduce an already-fused matrix and cluster it."""
     from db_bad_clust.clustering.cluster_engine import ClusterEngine
@@ -299,6 +307,7 @@ def _cluster(
         min_cluster_size=min_cluster_size,
         min_samples=min_samples,
         metric=metric,
+        cluster_selection_method=cluster_selection_method,
     ).fit_predict(reduced)
 
 
@@ -310,6 +319,7 @@ def _score_phi(
     min_cluster_size: int = HDBSCAN_MIN_CLUSTER_SIZE,
     min_samples: int | None = HDBSCAN_MIN_SAMPLES,
     metric: str = "euclidean",
+    cluster_selection_method: str = "eom",
 ) -> ClusterScore:
     """Reduce, cluster and score an already-fused feature matrix."""
     cluster_ids = _cluster(
@@ -319,6 +329,7 @@ def _score_phi(
         min_cluster_size=min_cluster_size,
         min_samples=min_samples,
         metric=metric,
+        cluster_selection_method=cluster_selection_method,
     )
     predicted = clusters_to_labels(cluster_ids, dataset.truth)
     return score("phi", predicted, dataset.truth, group_ids=cluster_ids)

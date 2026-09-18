@@ -182,6 +182,39 @@ class TestAgglomerative:
             engine.fit_predict(single_sample)
 
 
+class TestHDBSCAN:
+    """HDBSCAN tests — cluster_selection_method/min_samples matter for the
+    sweep in evaluation/experiments.py (see docs/research_improving_clustering.md)."""
+
+    def test_default_finds_the_two_clusters(self, clustered_data: np.ndarray) -> None:
+        engine = ClusterEngine(method="hdbscan", min_cluster_size=2, min_samples=1)
+        labels = engine.fit_predict(clustered_data)
+        assert len(labels) == 10
+        assert len(set(labels.tolist()) - {-1}) == 2
+
+    def test_default_cluster_selection_method_is_eom(self, clustered_data: np.ndarray) -> None:
+        """eom is hdbscan's own library default — this pipeline must not silently
+        pick something else when the caller doesn't specify."""
+        engine = ClusterEngine(method="hdbscan", min_cluster_size=2, min_samples=1)
+        engine.fit_predict(clustered_data)
+        assert engine._model.cluster_selection_method == "eom"
+
+    def test_cluster_selection_method_leaf_is_honoured(self, clustered_data: np.ndarray) -> None:
+        engine = ClusterEngine(
+            method="hdbscan",
+            min_cluster_size=2,
+            min_samples=1,
+            cluster_selection_method="leaf",
+        )
+        engine.fit_predict(clustered_data)
+        assert engine._model.cluster_selection_method == "leaf"
+
+    def test_min_samples_is_passed_through(self, clustered_data: np.ndarray) -> None:
+        engine = ClusterEngine(method="hdbscan", min_cluster_size=2, min_samples=3)
+        engine.fit_predict(clustered_data)
+        assert engine._model.min_samples == 3
+
+
 # ── Empty / edge cases ──────────────────────────────────────────────────
 
 

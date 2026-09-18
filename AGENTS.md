@@ -189,13 +189,28 @@ unitario, así que los cosenos esperados son literales y no un recálculo de lo 
   filas — las tablas quedan vacías a propósito.
 - `generation/anti_patterns.py` solo guarda `TABLE_COMMENTS`/`COLUMN_COMMENTS`, aplicados a
   Oracle vía `scripts/apply_comments.py` una vez el esquema existe.
-- Validado: a α=1.00 las representaciones nombre-solo y anclas (que nunca leen tipo/constraints)
-  reproducen la tabla histórica de este documento cifra por cifra, porque dependen solo de los
-  nombres de tabla/columna — invariantes a la reconstrucción. El documento (que sí escribe tipo y
-  constraints en la oración) queda cerca pero no idéntico (ARI 0.3850 vs 0.3748 en el corpus
-  completo); "solo estructura" es la fila más sensible y la que más diverge (ver
-  `representation_degeneracy` — el colapso es aún más severo que el original, 10 vectores
-  distintos en vez de 24, por la política de longitud fija por tipo).
+- Validado con el `HDBSCAN_MIN_SAMPLES` histórico (2): a α=1.00 las representaciones nombre-solo
+  y anclas (que nunca leen tipo/constraints) reproducían la tabla histórica de este documento
+  cifra por cifra, porque dependen solo de los nombres de tabla/columna — invariantes a la
+  reconstrucción del esquema. El documento (que sí escribe tipo y constraints en la oración)
+  quedaba cerca pero no idéntico (ARI 0.3850 vs 0.3748 en el corpus completo). Esa propiedad de
+  reproducción exacta se rompió a propósito al subir `min_samples` a 3 (ver el bullet siguiente)
+  — el cambio de hiperparámetro de clustering afecta a *todas* las representaciones, no solo a
+  las estructurales, así que ya no hay una comparación cifra-por-cifra disponible como chequeo de
+  cordura. Lo que sigue sosteniéndose es el hallazgo cualitativo: el documento le gana a
+  estructura-sola y a nombre-solo en las cinco métricas, con o sin este cambio.
+- **`HDBSCAN_MIN_SAMPLES` subió de 2 a 3** tras barrer `cluster_selection_method` (`eom`/`leaf`) ×
+  `min_samples` (2/3/5) sobre la representación documento — ver
+  `docs/research_improving_clustering.md`, candidato #1. `cluster_selection_method` no cambió
+  nada en este corpus (eom y leaf dieron resultados idénticos); `min_samples=3` le ganó a 2 en
+  las cinco métricas sobre la evaluación honesta (sin gigantes): ARI 0.0938→0.1107, NMI
+  0.3754→0.3781, AMI 0.2464→0.2497, Accuracy 0.6732→0.6797, F1-macro 0.3676→0.4003. En el corpus
+  completo el efecto es mixto por representación (mejora en documento y anclas, empeora en
+  nombre-solo) — el criterio de selección fue la evaluación sin gigantes, la que AGENTS.md ya
+  trata como la que vale. "Solo estructura" sigue siendo la fila más sensible a la reconstrucción
+  del esquema (ver `representation_degeneracy` — colapso más severo que el original, 10 vectores
+  distintos en vez de 24, por la política de longitud fija por tipo), independiente de este
+  cambio de `min_samples`.
 - Nombres de tabla sensibles a mayúsculas — siempre entre comillas dobles.
 - Oracle permite una sola columna LONG por tabla (ORA-01754).
 
