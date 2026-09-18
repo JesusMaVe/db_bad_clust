@@ -104,6 +104,34 @@ def _experiment(args: argparse.Namespace) -> int:
     return 0
 
 
+def _score(args: argparse.Namespace) -> int:
+    """Health score + per-column structural recommendations for a database."""
+    from db_bad_clust.evaluation.health_report import (
+        fit_reference_model,
+        format_health_report,
+        score_reference,
+        score_target,
+        write_health_csv,
+    )
+
+    model = fit_reference_model(
+        reference_pickle=args.reference, labels_path=args.labels, folds=args.folds
+    )
+    if args.target is None or Path(args.target) == Path(args.reference):
+        result = score_reference(model, folds=args.folds)
+    else:
+        result = score_target(model, args.target, folds=args.folds)
+
+    print(format_health_report(result, folds=args.folds))
+
+    if args.csv:
+        Path(args.csv).parent.mkdir(parents=True, exist_ok=True)
+        write_health_csv(args.csv, result)
+        print(f"\nPer-column health verdicts → {args.csv}")
+
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="db-bad-clust",
@@ -143,6 +171,26 @@ def build_parser() -> argparse.ArgumentParser:
         help="also run the reference points the pipeline has to beat",
     )
     experiment.set_defaults(func=_experiment)
+
+    score = sub.add_parser(
+        "score", help="health score + structural recommendations for a database"
+    )
+    score.add_argument(
+        "--reference",
+        default="output/intermediate_docs.pkl",
+        help="labeled pickle the classifier is trained on",
+    )
+    score.add_argument("--labels", default="output/manual_labels.csv")
+    score.add_argument(
+        "--target",
+        default=None,
+        metavar="PICKLE",
+        help="pickle for the database being scored; omit or pass --reference's path "
+        "to self-check via out-of-fold prediction instead",
+    )
+    score.add_argument("--folds", type=int, default=5)
+    score.add_argument("--csv", metavar="PATH", default="output/health_report.csv")
+    score.set_defaults(func=_score)
 
     return parser
 
