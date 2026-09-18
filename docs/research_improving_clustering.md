@@ -302,6 +302,61 @@ Hallazgos:
   cluster al subir epsilon, para confirmar si son realmente columnas `giant_table`/`eav`/
   `polymorphic` las que se benefician, o si el efecto es más difuso.
 
+### Resultado medido del candidato #5 (2026-09-18)
+
+Implementado: nuevo módulo `clustering/late_fusion.py` (`co_association_matrix`,
+`consensus_clustering`) y `evaluation/experiments.py::evaluate_late_fusion` — clustera cada
+vista por separado (misma reducción/HDBSCAN que el resto del pipeline), arma la matriz de
+co-asociación (fracción de vistas en las que cada par de columnas cae en el mismo cluster; el
+ruido de HDBSCAN nunca cuenta como acuerdo, ni siquiera entre dos puntos de ruido) y corta un
+árbol de `AgglomerativeClustering(metric="precomputed")` a un `distance_threshold` — sin elegir
+ningún α/β/γ/δ combinado de antemano, y sin usar la cuenta real de etiquetas para fijar
+`n_clusters` (eso rompería el carácter no supervisado).
+
+Barrido de `distance_threshold` sobre dos vistas (documento α=1.00, estructura `STRUCTURE_ONLY`)
+y luego tres (+ tabla-agregada del candidato #4, ε=1.00), evaluación honesta (sin gigantes):
+
+| vistas | threshold |     ARI |    NMI |    AMI | F1-macro |  k |
+| ------ | --------: | ------: | -----: | -----: | -------: | -: |
+| **documento solo (baseline, fusión temprana)** | — | **0.1107** | **0.3781** | **0.2497** | **0.4003** | 17 |
+| documento + estructura | 0.1 – 0.5 | 0.0134 | 0.4107 | 0.0789 | 0.7877 | 88 |
+| documento + estructura | 0.75      | -0.0218 | 0.2664 | 0.0993 | 0.3342 | 22 |
+| documento + estructura | 0.9       | -0.0376 | 0.2405 | 0.1073 | 0.3032 | 16 |
+| documento + estructura + tabla | 0.15 – 0.3 | 0.0127 | 0.4104 | 0.0757 | 0.7877 | 89 |
+| documento + estructura + tabla | 0.4 – 0.6  | 0.0460 | ~0.389 | ~0.189 | 0.5164 | ~38 |
+| documento + estructura + tabla | 0.7        | 0.0752 | 0.3846 | 0.2571 | 0.3781 | 17 |
+| documento + estructura + tabla | 0.85       | -0.0285 | 0.2692 | 0.1565 | 0.1881 | 11 |
+
+Hallazgos:
+
+- **Ninguna configuración le gana al baseline de fusión temprana** — ni con 2 vistas ni con 3,
+  en ningún punto del barrido de threshold. El mejor resultado (3 vistas, threshold=0.7) da ARI
+  0.0752, todavía por debajo de 0.1107.
+- **El umbral estricto fragmenta, no afina**: con threshold bajo (requiere acuerdo en *todas*
+  las vistas para fusionar), el resultado es una partición mucho más fina que cualquier vista
+  individual — k=88-89 sobre 153 columnas, muchos clusters diminutos. El F1-macro se ve
+  artificialmente alto (0.7877) precisamente por eso: el nombrado por voto mayoritario acierta
+  trivialmente en clusters de 1-2 columnas. El ARI (la métrica honesta sobre la partición) lo
+  delata: 0.0127-0.0134, muy por debajo del baseline. Exactamente el caso que AGENTS.md ya
+  advierte de F1 como cota superior engañosa.
+- **El umbral laxo (≥0.75-0.9, fusiona si *alguna* vista coincide) tampoco ayuda** — funde
+  columnas que solo una vista débil (estructura, que ya colapsa mucho — ver
+  `representation_degeneracy`) puso juntas, y el ARI cae por debajo de cero.
+- Con solo 2 vistas, la matriz de co-asociación solo toma 3 valores (0, 0.5, 1), lo que hace al
+  barrido de threshold poco expresivo entre 0.1 y 0.5 (idéntico resultado en todo ese rango,
+  visible en la tabla). Agregar una tercera vista (tabla-agregada) da más resolución (0, 0.33,
+  0.67, 1) y un resultado algo mejor en el punto óptimo (0.0752 vs 0.0134), pero sigue sin
+  acercarse al baseline.
+- **Sin cambios al pipeline por defecto.** `evaluate_late_fusion`/`consensus_clustering` quedan
+  en el código, testeados, como una alternativa disponible — útil si en el futuro se agregan más
+  vistas genuinamente informativas (más de 3), donde una matriz de co-asociación más fina podría
+  comportarse distinto. Con las vistas disponibles hoy, la fusión temprana (concatenación
+  ponderada) sigue siendo la mejor opción medida.
+
+Con esto se cierran los 5 candidatos de este documento: 1 adoptado como nuevo default
+(`min_samples=3`), 1 disponible opt-in con reserva documentada (`epsilon`/tabla-agregada), 3
+resultados negativos honestos (modelo de embeddings, UMAP, fusión tardía).
+
 ---
 
 ## Referencias

@@ -389,6 +389,39 @@ def evaluate(
     )
 
 
+def evaluate_late_fusion(
+    name: str,
+    dataset: Dataset,
+    views: list[dict[str, float]],
+    distance_threshold: float = 0.5,
+    linkage: str = "average",
+    **kwargs: object,
+) -> Evaluation:
+    """Cluster each view separately, fuse the PARTITIONS via co-association,
+    score the consensus partition — late/partition-level fusion, an
+    alternative to `evaluate`'s early/feature-level (weighted concatenation)
+    fusion. See clustering/late_fusion.py and
+    docs/research_improving_clustering.md, candidato #5.
+
+    `views` is a list of weights dicts, one per view (e.g. a document-only
+    view and a structure-only view) — each gets its own `run_clustering` call
+    under the SAME reduction/HDBSCAN settings (`**kwargs`), so the only thing
+    that varies between views is which blocks are switched on.
+    """
+    from db_bad_clust.clustering.late_fusion import consensus_clustering
+
+    view_labels = [run_clustering(dataset, w, **kwargs) for w in views]  # type: ignore[arg-type]
+    cluster_ids = consensus_clustering(
+        view_labels, distance_threshold=distance_threshold, linkage=linkage
+    )
+    predicted = clusters_to_labels(cluster_ids, dataset.truth)
+    return Evaluation(
+        score=score(name, predicted, dataset.truth, group_ids=cluster_ids),
+        cluster_ids=[int(c) for c in cluster_ids],
+        predicted=predicted,
+    )
+
+
 def weights_for(alpha: float, base: dict[str, float] | None = None) -> dict[str, float]:
     """Weights at a given alpha, the rest sharing what is left in fixed ratio.
 

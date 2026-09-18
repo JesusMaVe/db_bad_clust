@@ -42,7 +42,7 @@ entrypoint shebangs are stale.
 ```
 
 ```bash
-.venv/bin/python -m pytest tests/ -v      # 423 tests, no DB required
+.venv/bin/python -m pytest tests/ -v      # 436 tests, no DB required
 .venv/bin/python -m ruff check src tests scripts   # lint-clean
 ```
 

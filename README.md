@@ -92,7 +92,7 @@ sobre las 243 etiquetas, no reglas — ver AGENTS.md):
 ```
 
 ```bash
-.venv/bin/python -m pytest tests/ -v       # 423 tests, sin BD ni descarga del modelo
+.venv/bin/python -m pytest tests/ -v       # 436 tests, sin BD ni descarga del modelo
 ```
 
 `AGENTS.md` tiene el detalle completo: invariantes, ablaciones y limitaciones medidas.

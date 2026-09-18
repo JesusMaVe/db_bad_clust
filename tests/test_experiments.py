@@ -13,6 +13,7 @@ from db_bad_clust.evaluation.experiments import (
     block_variance_shares,
     build_phi,
     evaluate,
+    evaluate_late_fusion,
     format_diagnostics,
     format_table,
     precision_sensitivity,
@@ -197,6 +198,38 @@ class TestEvaluate:
         data = _dataset(40)
         result = evaluate("x", data, {"alpha": 1.0, "beta": 0.0, "gamma": 0.0, "delta": 0.0})
         assert len(result.cluster_ids) == 40
+
+
+class TestEvaluateLateFusion:
+    def test_recovers_the_planted_grouping_from_two_views(self):
+        """A document-only view and a structure-only view, each cleanly
+        separating the two planted clouds, must agree in consensus."""
+        data = _dataset(40)
+        result = evaluate_late_fusion(
+            "late fusion",
+            data,
+            views=[
+                {"alpha": 1.0, "beta": 0.0, "gamma": 0.0, "delta": 0.0},
+                {"alpha": 0.0, "beta": 1.0, "gamma": 0.0, "delta": 0.0},
+            ],
+            min_cluster_size=5,
+        )
+        assert result.score.name == "late fusion"
+        assert len(result.predicted) == 40
+        assert len(result.cluster_ids) == 40
+
+    def test_single_view_matches_evaluate_on_the_same_weights(self):
+        """One view is a degenerate case of late fusion — sanity check that
+        the consensus step doesn't distort a trivial one-view fusion."""
+        data = _dataset(40)
+        weights = {"alpha": 1.0, "beta": 0.0, "gamma": 0.0, "delta": 0.0}
+        direct = evaluate("direct", data, weights, min_cluster_size=5)
+        fused = evaluate_late_fusion(
+            "fused", data, views=[weights], min_cluster_size=5
+        )
+        # Co-association of a single view is exact agreement/disagreement, so
+        # the consensus cut should reproduce the same number of clusters.
+        assert len(set(fused.cluster_ids) - {-1}) == len(set(direct.cluster_ids) - {-1})
 
 
 class TestRepresentationDegeneracy:

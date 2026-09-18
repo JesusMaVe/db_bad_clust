@@ -183,7 +183,7 @@ el 0.5031 de α=0 no es lo que parece.
 ## Tests y lint
 
 ```bash
-.venv/bin/python -m pytest tests/ -v      # 423 tests, sin BD y sin descargar el modelo
+.venv/bin/python -m pytest tests/ -v      # 436 tests, sin BD y sin descargar el modelo
 .venv/bin/python -m ruff check src tests scripts   # lint-clean
 ```
 
