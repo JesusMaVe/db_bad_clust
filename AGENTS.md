@@ -28,12 +28,22 @@ Usa `.venv/bin/python -m <cmd>` — los shebangs del venv están obsoletos (la c
 ```
 
 ```bash
+# Primera vez / volumen Oracle nuevo: bootstrap del esquema (ver sección Oracle abajo)
+.venv/bin/python scripts/generate_schema_sql.py                # escribe sql_init/001_bad_schema.sql
+docker compose up -d                                            # aplica el DDL en un volumen nuevo
+.venv/bin/python scripts/verify_schema.py                       # confirma 23 tablas / 243 columnas
+
 # Reconstruir los bloques desde Oracle (contenedor arriba)
 .venv/bin/python scripts/apply_comments.py                     # una vez
 .venv/bin/python scripts/build_embeddings.py --dry-run         # ver los documentos
 .venv/bin/python scripts/build_embeddings.py --output output/intermediate_docs.pkl
 .venv/bin/python scripts/build_embeddings.py --semantic anchors --output output/intermediate_anchors.pkl
 .venv/bin/python scripts/build_embeddings.py --no-table-comment --output output/intermediate_docs_nocomment.pkl
+
+# intermediate_02.pkl (baseline "viejo", nombre-solo) via notebooks 01+02, headless:
+#   jupyter nbconvert --to notebook --execute --output executed_01.ipynb notebooks/01_data_preparation.ipynb
+#   jupyter nbconvert --to notebook --execute --output executed_02.ipynb notebooks/02_ml_embeddings.ipynb
+# (requiere ipykernel, en los dev deps; el notebook 01 necesita el contenedor arriba)
 ```
 
 Los artefactos: `intermediate_02.pkl` es el **baseline histórico** (embedding del nombre, sin
@@ -162,11 +172,30 @@ el 0.5031 de α=0 no es lo que parece.
 Los tests de `semantic_anchors` inyectan un embedder de prueba que coloca cada texto en un eje
 unitario, así que los cosenos esperados son literales y no un recálculo de lo que hace el código.
 
-## Oracle — no es reproducible al 100% desde el repo
+## Oracle — el esquema original no es recuperable, pero hay un bootstrap reconstruido
 
-- Las 23 tablas se crearon ad-hoc; no hay generador de DDL del esquema real.
+- Las 23 tablas originales se crearon ad-hoc; nunca hubo generador de DDL versionado, y ese
+  esquema en sí (con sus PK/FK/longitudes reales) es irrecuperable — no vive en ningún branch.
+- `scripts/generate_schema_sql.py` reconstruye un esquema desde cero a partir de
+  `output/manual_labels.csv` (nombre y tipo exactos de las 243 columnas) y escribe
+  `sql_init/001_bad_schema.sql`, que `docker-compose.yml` aplica automáticamente en el primer
+  arranque de un volumen nuevo (`docker compose up -d` tras `docker compose down -v` si ya
+  existía un volumen). PK/FK se infieren con una heurística documentada en el propio script
+  (columnas `NUMBER` con forma de ID, excluyendo las etiquetadas `impossible_data`/
+  `inconsistent_naming`); longitudes son fijas por tipo. Es fiel en nombres/tipos/semántica, no
+  en constraints — no lo trates como el esquema original. `scripts/verify_schema.py` confirma
+  que lo creado coincide exactamente (ambas direcciones) con `manual_labels.csv`.
+- Sin `INSERT`s: el pipeline (`SchemaExtractor`) solo lee vistas de catálogo, nunca contenido de
+  filas — las tablas quedan vacías a propósito.
 - `generation/anti_patterns.py` solo guarda `TABLE_COMMENTS`/`COLUMN_COMMENTS`, aplicados a
-  Oracle vía `scripts/apply_comments.py`. La generación del esquema en sí no está en este repo.
+  Oracle vía `scripts/apply_comments.py` una vez el esquema existe.
+- Validado: a α=1.00 las representaciones nombre-solo y anclas (que nunca leen tipo/constraints)
+  reproducen la tabla histórica de este documento cifra por cifra, porque dependen solo de los
+  nombres de tabla/columna — invariantes a la reconstrucción. El documento (que sí escribe tipo y
+  constraints en la oración) queda cerca pero no idéntico (ARI 0.3850 vs 0.3748 en el corpus
+  completo); "solo estructura" es la fila más sensible y la que más diverge (ver
+  `representation_degeneracy` — el colapso es aún más severo que el original, 10 vectores
+  distintos en vez de 24, por la política de longitud fija por tipo).
 - Nombres de tabla sensibles a mayúsculas — siempre entre comillas dobles.
 - Oracle permite una sola columna LONG por tabla (ORA-01754).
 
