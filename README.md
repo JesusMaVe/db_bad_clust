@@ -40,6 +40,11 @@ de 0.7119 a **0.7984** y F1-macro de 0.2670 a **0.4622**.
 *Accuracy y F1 de un clustering usan nombrado por voto mayoritario, que consulta la verdad de
 terreno: son cota superior, no marca alcanzada.*
 
+*Estos son los números históricos, con la base Oracle original (nunca versionada). Ese esquema
+no es recuperable; `sql_init/` reconstruye uno fiel en nombres/tipos/semántica desde
+`output/manual_labels.csv` (ver "Uso" abajo), con el que los números divergen un poco — el
+detalle completo, incluyendo qué tan cerca queda cada representación, está en AGENTS.md.*
+
 ### Tres hallazgos que cambiaron la conclusión
 
 1. **El peso α no ponderaba nada.** La normalización z-score por dimensión deja la varianza
@@ -58,8 +63,12 @@ terreno: son cota superior, no marca alcanzada.*
 ## Uso
 
 ```bash
-docker compose up -d
 .venv/bin/python -m pip install -e ".[dev]"
+
+# Primera vez / volumen Oracle nuevo: bootstrap del esquema sintético
+.venv/bin/python scripts/generate_schema_sql.py    # escribe sql_init/001_bad_schema.sql
+docker compose up -d                               # lo aplica en un volumen nuevo
+.venv/bin/python scripts/verify_schema.py           # confirma 23 tablas / 243 columnas
 
 .venv/bin/python -m db_bad_clust.cli experiment --sweep
 .venv/bin/python -m db_bad_clust.cli experiment --without-giants \
@@ -74,11 +83,22 @@ Reconstruir los embeddings desde Oracle:
 .venv/bin/python scripts/build_embeddings.py --output output/intermediate_docs.pkl
 ```
 
+Puntaje de salud del esquema + recomendaciones estructurales por columna (RandomForest entrenado
+sobre las 243 etiquetas, no reglas — ver AGENTS.md):
+
+```bash
+.venv/bin/python -m db_bad_clust.cli score                        # auto-chequeo, out-of-fold
+.venv/bin/python -m db_bad_clust.cli score --target otra_base.pkl # una base Oracle distinta
+```
+
 ```bash
 .venv/bin/python -m pytest tests/ -v       # 423 tests, sin BD ni descarga del modelo
 ```
 
 `AGENTS.md` tiene el detalle completo: invariantes, ablaciones y limitaciones medidas.
+`docs/research_improving_clustering.md` documenta los intentos de mejora sobre el resultado
+central (hiperparámetros de HDBSCAN, modelos de embeddings alternativos, UMAP, features
+agregadas por tabla) — con fuentes primarias citadas y resultados medidos, positivos y negativos.
 
 ## Limitaciones
 
