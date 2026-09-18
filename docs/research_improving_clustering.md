@@ -167,6 +167,49 @@ Hallazgos:
   ningún hiperparámetro de clustering cambiara respecto al run histórico. Se documenta el
   trade-off en AGENTS.md en vez de ocultarlo.
 
+### Resultado medido del candidato #2 (2026-09-18)
+
+Implementado: `scripts/build_embeddings.py::build()` gana un parámetro `text_prefix` (CLI:
+`--query-prefix`), prependido a cada documento antes de codificar — necesario para reproducir el
+uso documentado de la familia `intfloat/multilingual-e5-*` (Tema 1.3). `--model` ya existía como
+flag, así que cambiar de encoder no necesitó ningún otro cambio de código.
+
+Se generaron pickles con `intfloat/multilingual-e5-small` (con y sin el prefijo `"query: "`,
+para aislar su efecto), `paraphrase-multilingual-mpnet-base-v2` y `intfloat/multilingual-e5-base`,
+y se compararon contra el `paraphrase-multilingual-MiniLM-L12-v2` actual con
+`cli experiment --without-giants --ablation` (la evaluación honesta, 153 columnas):
+
+| modelo                              | dim | ARI    | NMI    | AMI    | Accuracy | F1-macro |  k |
+| ------------------------------------ | --: | -----: | -----: | -----: | -------: | -------: | -: |
+| MiniLM-L12-v2 (actual)                | 384 | 0.1107 | 0.3781 | 0.2497 |   0.6797 |   0.4003 | 17 |
+| multilingual-e5-small (con prefijo)   | 384 | 0.0680 | 0.3564 | 0.2177 |   0.6536 |   0.3671 | 18 |
+| multilingual-e5-small (sin prefijo)   | 384 | 0.0690 | 0.3586 | 0.2204 |   0.6601 |   0.3688 | 18 |
+| mpnet-base-v2                         | 768 | 0.0713 | 0.3401 | 0.2036 |   0.6405 |   0.3892 | 17 |
+| multilingual-e5-base (con prefijo)    | 768 | 0.0538 | 0.3398 | 0.1974 |   0.6405 |   0.3609 | 18 |
+
+Hallazgos:
+
+- **El modelo actual le gana a las tres alternativas en las cinco métricas**, en la evaluación
+  sin gigantes y también en el corpus completo (mismo orden, no se muestra la tabla por brevedad).
+  Resultado negativo honesto: ni el modelo del mismo tamaño con preentrenamiento contrastivo
+  (e5-small) ni los modelos más grandes con mejor score de clustering en su propio MTEB card
+  (mpnet, e5-base) mejoran este corpus específico.
+- **El prefijo `"query: "` no explica la diferencia** — con y sin prefijo, e5-small da
+  prácticamente el mismo resultado (ARI 0.0680 vs 0.0690, dentro del ruido). No es un artefacto
+  de implementación; el modelo genuinamente rinde peor aquí.
+- Lectura plausible, no verificada a fondo: el corpus son oraciones cortas y muy estructuradas en
+  español ("tabla X, columna Y, tipo Z..."), más cercanas al objetivo de paráfrasis con el que se
+  entrenó MiniLM-L12-v2 que al objetivo de recuperación contrastiva de la familia e5 o al espacio
+  semántico general de mpnet — pero esto queda como hipótesis, no como hallazgo confirmado contra
+  fuente primaria.
+- **Sin cambios al default**: `model_name` en `BERTEmbedder`/`build_embeddings.py` se queda en
+  `paraphrase-multilingual-MiniLM-L12-v2`. El flag `--query-prefix` se conserva en el código (no
+  tiene costo — default `""`, no-op para el modelo actual) porque deja la infraestructura lista
+  para probar otra familia de modelos en el futuro sin tener que reimplementarlo.
+- Los 5 pickles de prueba (`intermediate_docs_e5small*.pkl`, `*_mpnet.pkl`, `*_e5base.pkl`) se
+  borraron tras la comparación — están gitignored y el hallazgo (negativo) ya quedó documentado
+  aquí, no hacía falta conservarlos.
+
 ---
 
 ## Referencias

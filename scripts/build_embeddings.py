@@ -48,6 +48,7 @@ def build(
     include_table_comment: bool = True,
     semantic: str = "documents",
     mismatch: bool = False,
+    text_prefix: str = "",
 ) -> dict[str, object]:
     """Documents → embeddings, plus the structural blocks, in one column order.
 
@@ -73,6 +74,13 @@ def build(
     the block, so a second column on a different natural scale (0-1 mismatch
     against log-length) needs no new normalisation logic — this is exactly
     the case `e_stat` (delta) was for.
+
+    `text_prefix` is prepended to every document before encoding (semantic=
+    "documents" only). Some encoders are trained with instruction prefixes and
+    score worse without them — e.g. the intfloat/multilingual-e5-* family's own
+    model card documents a "query: " prefix, including for clustering per its
+    FAQ. Not applying it isn't a neutral no-op for those models, it's silently
+    reproducing the wrong documented usage.
     """
     preprocessor = TextPreprocessor.for_documents()
     documents, keys = preprocessor.build_documents(
@@ -93,7 +101,8 @@ def build(
     if semantic == "anchors":
         e_text = SemanticAnchors(embedder).build_block(names, columns)
     else:
-        e_text = embedder.encode(documents)
+        prefixed = [text_prefix + d for d in documents] if text_prefix else documents
+        e_text = embedder.encode(prefixed)
 
     encoder = StructuralEncoder()
     blocks = encoder.encode_all(columns)
@@ -117,6 +126,7 @@ def build(
         "all_columns": columns,
         "table_names": [t.name for t in schema.tables],
         "model_name": model_name,
+        "text_prefix": text_prefix,
     }
 
 
@@ -134,6 +144,13 @@ def main() -> None:
         choices=("documents", "anchors"),
         default="documents",
         help="what goes in e_text: the raw document embedding, or the anchor block",
+    )
+    parser.add_argument(
+        "--query-prefix",
+        default="",
+        help='text prepended to every document before encoding (documents mode only), '
+        'e.g. "query: " for the intfloat/multilingual-e5-* family — see that '
+        "family's model card; not optional for those models, not needed for others",
     )
     parser.add_argument(
         "--mismatch",
@@ -171,6 +188,7 @@ def main() -> None:
         include_table_comment=not args.no_table_comment,
         semantic=args.semantic,
         mismatch=args.mismatch,
+        text_prefix=args.query_prefix,
     )
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
