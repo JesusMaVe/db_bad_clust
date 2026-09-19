@@ -19,6 +19,10 @@ in TYPE_FAMILY_ANCHOR_VARIANTS — the input to `cli experiment --robustness`.
 Both cost one encoder pass over the bare column names and are weighted by
 `zeta`, 0.0 by default, so storing them changes no existing experiment.
 
+It also stores `e_name`, the embedding of each bare column name, and
+`name_intrinsic`, its [emptiness, divergence] (features/name_signals.py) — the
+inputs of the table level in the two-level design (`--two-level`).
+
 Usage:
     .venv/bin/python scripts/build_embeddings.py --output output/intermediate_docs.pkl
     .venv/bin/python scripts/build_embeddings.py --dry-run          # print 5 documents, no model
@@ -157,6 +161,14 @@ def build(
     }
     e_conflict = e_conflict_variants["orig"]
 
+    from db_bad_clust.features.name_signals import internal_divergence, semantic_emptiness
+
+    e_name = embedder.encode(bare_names)
+    anchor_vectors = ConflictBlock(embedder).anchor_vectors
+    name_intrinsic = np.column_stack(
+        [semantic_emptiness(e_name, anchor_vectors), internal_divergence(bare_names, embedder)]
+    )
+
     return {
         "e_text": e_text,
         "e_type": blocks["data_types"],
@@ -164,6 +176,8 @@ def build(
         "e_stat": e_stat,
         "e_conflict": e_conflict,
         "e_conflict_variants": e_conflict_variants,
+        "e_name": e_name,
+        "name_intrinsic": name_intrinsic,
         "conflict_mode": conflict_mode,
         "column_index": keys,
         "documents": documents,

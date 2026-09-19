@@ -799,3 +799,117 @@ class TestBootstrapCompare:
         assert "new - ref" in out
         assert "100%" in out
         assert isinstance(result, BootstrapResult)
+
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Two levels
+# ═══════════════════════════════════════════════════════════════════════
+
+from db_bad_clust.evaluation.experiments import (  # noqa: E402
+    NO_TABLE_ANTIPATTERN,
+    evaluate_two_level,
+    format_two_level,
+    table_labels_from_columns,
+)
+
+
+def _two_level_dataset() -> Dataset:
+    """Fifteen normal tables of mixed columns, plus one table of meaningless names.
+
+    The generic table differs the way TBL_DATOS does in the real corpus: its
+    names are empty of meaning, unlike each other, and none contradicts its type.
+    """
+    rng = np.random.default_rng(3)
+    tables, truth, names = [], [], []
+    for t in range(15):
+        for c in range(6):
+            tables.append(f"T{t:02d}")
+            truth.append("wrong_data_types" if c < 2 else "clean")
+            names.append(f"C{c}")
+    for c in range(6):
+        tables.append("GENERIC")
+        truth.append("inconsistent_naming")
+        names.append(f"X{c}")
+    n = len(tables)
+    generic = np.array([t == "GENERIC" for t in tables])
+    conflict = np.zeros((n, CONFLICT_DIM))
+    conflict[:, 9] = 1.0  # everything declared as text
+    for i, label in enumerate(truth):
+        if label == "wrong_data_types":
+            conflict[i, 0] = 1.0  # expects a date
+            conflict[i, 3] = -1.0
+        conflict[i, 12] = 0.5
+    # normal tables vary like real ones do; a population with no spread at all
+    # would put the fence at ~0 and flag any table for a rounding difference
+    e_name = np.tile([1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], (n, 1)) + rng.normal(0, 0.25, (n, 7))
+    e_name[generic] = np.eye(7)[1:7]  # six names, each unlike the others
+    intrinsic = np.column_stack([np.full(n, 0.3) + rng.normal(0, 0.08, n), np.zeros(n)])
+    intrinsic[generic, 0] = 0.95
+    return Dataset(
+        e_text=rng.normal(0, 1, (n, 4)),
+        e_type=np.ones((n, 1)),
+        e_rest=rng.normal(0, 1, (n, 2)),
+        e_stat=np.ones((n, 1)),
+        column_index=[f"{t}.{c}" for t, c in zip(tables, names, strict=True)],
+        truth=truth,
+        e_conflict=conflict,
+        e_name=e_name,
+        name_intrinsic=intrinsic,
+    )
+
+
+class TestTableLabels:
+    def test_a_table_takes_a_label_covering_half_its_columns(self):
+        labels = table_labels_from_columns(_two_level_dataset())
+        assert labels["GENERIC"] == "inconsistent_naming"
+        assert labels["T00"] == NO_TABLE_ANTIPATTERN  # wrong_data_types is 2 of 6
+
+    def test_needs_column_labels(self):
+        ds = _two_level_dataset()
+        ds.truth = None
+        with pytest.raises(ValueError):
+            table_labels_from_columns(ds)
+
+
+class TestEvaluateTwoLevel:
+    def test_flags_the_meaningless_table_and_groups_its_columns(self):
+        """Tukey's fence may also catch a borderline normal table in a random
+        sample; what must hold is that the generic table is flagged in a group
+        of its own and its columns form a group no normal column shares."""
+        run = evaluate_two_level("t", _two_level_dataset(), CONFLICT)
+        anomalous = run.anomalous_tables
+        assert "GENERIC" in anomalous
+        assert list(anomalous.values()).count(anomalous["GENERIC"]) == 1
+        ids = np.array(run.evaluation.cluster_ids)
+        generic = ids[-6:]
+        assert len(set(generic.tolist())) == 1
+        assert generic[0] not in set(ids[:-6].tolist())
+        assert run.table_score[0] > 0.5
+
+    def test_is_reachable_through_evaluate_blind(self):
+        run = evaluate_blind("t", _two_level_dataset(), CONFLICT, algorithm="two-level")
+        assert run.algorithm == "two-level"
+        assert run.chosen.startswith("k=") and run.chosen.endswith("t")
+
+    def test_beats_the_column_level_alone_on_this_fixture(self):
+        ds = _two_level_dataset()
+        flat = evaluate_blind("c", ds, CONFLICT, algorithm="ward").evaluation.score.ari
+        two = evaluate_two_level("t", ds, CONFLICT).evaluation.score.ari
+        assert two > flat
+
+    def test_refuses_a_dataset_without_name_signals(self):
+        with pytest.raises(ValueError):
+            evaluate_two_level("t", _conflict_dataset(), CONFLICT)
+
+    def test_format_names_the_flagged_tables(self):
+        out = format_two_level(evaluate_two_level("t", _two_level_dataset(), CONFLICT))
+        assert "GENERIC" in out and "anomaly group" in out
+        assert "Table level" in out
+
+    def test_subset_carries_the_name_signals(self):
+        ds = _two_level_dataset()
+        sub = ds.subset(range(10))
+        assert sub.e_name.shape == (10, 7)
+        assert sub.name_intrinsic.shape == (10, 2)
+        assert ds.with_conflict(ds.e_conflict).e_name is ds.e_name

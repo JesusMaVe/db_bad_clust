@@ -71,7 +71,14 @@ STABILITY_GRID: tuple[tuple[int, int], ...] = tuple(
 # range, so the upper bound is not what picks it; 2 stays in so that a
 # representation that really does split in two is allowed to say so.
 WARD_K_RANGE: tuple[int, int] = (2, 30)
-BLIND_ALGORITHMS = ("ward", "hdbscan")
+# "two-level": Ward on the columns, plus the table level of
+# clustering/table_level.py for the anti-patterns that belong to a table.
+BLIND_ALGORITHMS = ("ward", "hdbscan", "two-level")
+
+# A table carries a table-level label when one non-clean label covers at least
+# this share of its columns (derived from the column labels, never hand-set).
+TABLE_LABEL_SHARE = 0.5
+NO_TABLE_ANTIPATTERN = "sin_problema_de_tabla"
 
 # The two tables that alone supply every `giant_table` label (90 of 243
 # columns). Excluding them isolates the anti-patterns a per-column encoder can
@@ -108,6 +115,10 @@ class Dataset:
 
     `e_conflict_variants` holds the same block under each anchor wording
     (TYPE_FAMILY_ANCHOR_VARIANTS), for `robustness_over_wordings`.
+
+    `e_name` (N, d) holds the embeddings of the bare column names and
+    `name_intrinsic` (N, 2) their [emptiness, divergence] — the inputs of the
+    table level (features/name_signals.py). None for older pickles.
     """
 
     e_text: np.ndarray
@@ -120,6 +131,8 @@ class Dataset:
     e_table: np.ndarray | None = None
     e_conflict: np.ndarray | None = None
     e_conflict_variants: dict[str, np.ndarray] | None = None
+    e_name: np.ndarray | None = None
+    name_intrinsic: np.ndarray | None = None
 
     def __post_init__(self) -> None:
         lengths = {len(self.column_index), *(b.shape[0] for b in self.blocks)}
@@ -131,6 +144,9 @@ class Dataset:
             lengths.add(self.e_conflict.shape[0])
         for variant in (self.e_conflict_variants or {}).values():
             lengths.add(variant.shape[0])
+        for block in (self.e_name, self.name_intrinsic):
+            if block is not None:
+                lengths.add(block.shape[0])
         if len(lengths) != 1:
             raise ValueError(f"every block must have the same number of rows, got {sorted(lengths)}")
 
@@ -169,6 +185,8 @@ class Dataset:
                 if self.e_conflict_variants is not None
                 else None
             ),
+            e_name=self.e_name[keep] if self.e_name is not None else None,
+            name_intrinsic=self.name_intrinsic[keep] if self.name_intrinsic is not None else None,
         )
 
     def with_conflict(self, e_conflict: np.ndarray) -> Dataset:
@@ -184,6 +202,8 @@ class Dataset:
             e_table=self.e_table,
             e_conflict=e_conflict,
             e_conflict_variants=self.e_conflict_variants,
+            e_name=self.e_name,
+            name_intrinsic=self.name_intrinsic,
         )
 
 
@@ -231,6 +251,8 @@ def load_dataset(
         e_table = build_table_block(schema, column_index)
     e_conflict = data.get("e_conflict")
     variants = data.get("e_conflict_variants")
+    e_name = data.get("e_name")
+    name_intrinsic = data.get("name_intrinsic")
     return Dataset(
         e_text=np.asarray(data["e_text"], dtype=np.float64),
         e_type=np.asarray(data["e_type"], dtype=np.float64),
@@ -245,6 +267,10 @@ def load_dataset(
             {name: np.asarray(block, dtype=np.float64) for name, block in variants.items()}
             if variants is not None
             else None
+        ),
+        e_name=np.asarray(e_name, dtype=np.float64) if e_name is not None else None,
+        name_intrinsic=(
+            np.asarray(name_intrinsic, dtype=np.float64) if name_intrinsic is not None else None
         ),
     )
 
@@ -670,14 +696,17 @@ def evaluate_blind(
 ) -> BlindEvaluation:
     """Fuse, reduce, cluster with a label-free choice of hyper-parameter, then score.
 
-    ward:    k by silhouette over `k_range`.
-    hdbscan: the grid cell with the highest relative validity, then noise
-             reassigned to its nearest clusters (`reassign_noise_knn`).
+    ward:      k by silhouette over `k_range`.
+    hdbscan:   the grid cell with the highest relative validity, then noise
+               reassigned to its nearest clusters (`reassign_noise_knn`).
+    two-level: ward on the columns, then the table level (`evaluate_two_level`).
 
     The labels are used only after the partition exists, to score it.
     """
     if algorithm not in BLIND_ALGORITHMS:
         raise ValueError(f"algorithm must be one of {BLIND_ALGORITHMS}, got {algorithm!r}")
+    if algorithm == "two-level":
+        return evaluate_two_level(name, dataset, weights, k_range=k_range)
     reduced = _reduce(build_phi(dataset, weights))
 
     if algorithm == "ward":
@@ -752,6 +781,130 @@ def robustness_over_wordings(
         for wording, block in dataset.e_conflict_variants.items()
     ]
     return RobustnessReport(algorithm, rows)
+
+
+# ── Two levels: columns for column anti-patterns, tables for table ones ─
+
+
+def table_labels_from_columns(
+    dataset: Dataset, share: float = TABLE_LABEL_SHARE
+) -> dict[str, str]:
+    """A label per table, derived from its columns' labels — none are hand-set.
+
+    The most frequent non-clean label, when it covers at least `share` of the
+    table's columns; NO_TABLE_ANTIPATTERN otherwise. On this corpus: two
+    giant_table, two inconsistent_naming, one eav, one reserved_words, and
+    seventeen tables without a table-level anti-pattern.
+    """
+    from collections import Counter
+
+    if dataset.truth is None:
+        raise ValueError("table labels need the column labels")
+    by_table: dict[str, list[str]] = {}
+    for table, label in zip(dataset.table_of, dataset.truth, strict=True):
+        by_table.setdefault(table, []).append(label)
+    out = {}
+    for table, labels in by_table.items():
+        counts = Counter(label for label in labels if label != "clean")
+        top, n = counts.most_common(1)[0] if counts else ("clean", 0)
+        out[table] = top if n / len(labels) >= share else NO_TABLE_ANTIPATTERN
+    return out
+
+
+@dataclass
+class TwoLevelEvaluation:
+    """A blind two-level run. Duck-types BlindEvaluation for the shared reports."""
+
+    evaluation: Evaluation
+    algorithm: str
+    chosen: str
+    criterion: float
+    column_ids: list[int]
+    table_order: list[str]
+    table_groups: list[int]
+    table_score: tuple[float, float]  # (ARI, AMI) against table_labels_from_columns
+
+    @property
+    def anomalous_tables(self) -> dict[str, int]:
+        from db_bad_clust.clustering.table_level import NORMAL
+
+        return {t: g for t, g in zip(self.table_order, self.table_groups, strict=True) if g != NORMAL}
+
+
+def evaluate_two_level(
+    name: str,
+    dataset: Dataset,
+    weights: dict[str, float],
+    k_range: tuple[int, int] = WARD_K_RANGE,
+) -> TwoLevelEvaluation:
+    """Column level (Ward, blind) plus table level (Tukey fence on BERT naming).
+
+    The table level reads `e_name`/`name_intrinsic` and the conflict block in
+    use (so a wording swap reaches it too); nothing it does sees a label. The
+    labels score the result afterwards, at both levels.
+    """
+    from sklearn.metrics import adjusted_mutual_info_score, adjusted_rand_score
+
+    from db_bad_clust.clustering.table_level import combine_levels, flag_anomalous_tables
+    from db_bad_clust.features.name_signals import table_naming_features
+
+    if dataset.e_name is None or dataset.name_intrinsic is None or dataset.e_conflict is None:
+        raise ValueError(
+            "the two-level design needs e_name, name_intrinsic and e_conflict — "
+            "rebuild the pickle with scripts/build_embeddings.py (--from-pickle works)"
+        )
+    columns = evaluate_blind(name, dataset, weights, algorithm="ward", k_range=k_range)
+    column_names = [key.split(".", 1)[1] for key in dataset.column_index]
+    conflicting = (dataset.e_conflict[:, :6] > 0.5).any(axis=1)
+    order, features = table_naming_features(
+        dataset.name_intrinsic, dataset.e_name, column_names, dataset.table_of, conflicting
+    )
+    from collections import Counter
+
+    size = Counter(dataset.table_of)
+    groups = flag_anomalous_tables(features, n_columns=[size[t] for t in order])
+    combined = combine_levels(
+        columns.evaluation.cluster_ids, dataset.table_of, order, groups
+    )
+    predicted = clusters_to_labels(combined, dataset.truth)
+    evaluation = Evaluation(
+        score=score(name, predicted, dataset.truth, group_ids=combined, table_of=dataset.table_of),
+        cluster_ids=[int(c) for c in combined],
+        predicted=predicted,
+    )
+    table_truth = table_labels_from_columns(dataset)
+    truth_order = [table_truth[t] for t in order]
+    table_score = (
+        float(adjusted_rand_score(truth_order, groups)),
+        float(adjusted_mutual_info_score(truth_order, groups)),
+    )
+    n_anomalous = int((groups != -1).sum())
+    return TwoLevelEvaluation(
+        evaluation=evaluation,
+        algorithm="two-level",
+        chosen=f"{columns.chosen} +{n_anomalous}t",
+        criterion=columns.criterion,
+        column_ids=columns.evaluation.cluster_ids,
+        table_order=order,
+        table_groups=[int(g) for g in groups],
+        table_score=table_score,
+    )
+
+
+def format_two_level(run: TwoLevelEvaluation) -> str:
+    """Which tables the table level flagged, and how that level scores on its own."""
+    lines = [
+        f"Table level: {len(run.table_order)} tables, "
+        f"ARI {run.table_score[0]:.4f}, AMI {run.table_score[1]:.4f} against the "
+        "table labels derived from the column labels.",
+    ]
+    anomalous = run.anomalous_tables
+    if not anomalous:
+        lines.append("  No table crossed the Tukey fence: every table is normal.")
+    for group in sorted(set(anomalous.values())):
+        members = ", ".join(t for t, g in anomalous.items() if g == group)
+        lines.append(f"  anomaly group {group}: {members}")
+    return "\n".join(lines)
 
 
 # ── Bootstrap: are the differences between configurations real? ─────
@@ -953,8 +1106,31 @@ def format_bootstrap(result: BootstrapResult, reference: str) -> str:
                 _fmt_table_ari(point["table_ari"]),
             ]
         )
+    lines = [
+        f"Bootstrap, {result.n_boot} resamples, "
+        + (
+            f"re-running the whole pipeline on {result.frac:.0%} of the columns."
+            if result.mode == "subsample"
+            else f"re-scoring fixed partitions on {result.frac:.0%} of the columns."
+        ),
+        "Point estimates are on the full dataset; intervals are percentile 95%.",
+        render_table(BOOTSTRAP_COLUMNS, rows),
+        "",
+        "Paired differences (same resamples for every configuration):",
+        format_paired_differences(result, reference),
+        "",
+        "A difference is real at 95% when its interval excludes zero. 'wins' is the",
+        "share of resamples in which the configuration beat the reference.",
+    ]
+    return "\n".join(lines)
+
+
+def format_paired_differences(
+    result: BootstrapResult, reference: str, names: list[str] | None = None
+) -> str:
+    """Every configuration (or `names`) paired against `reference`, ARI and AMI."""
     diffs = []
-    for name in result.point:
+    for name in names or list(result.point):
         if name == reference:
             continue
         for metric in ("ari", "ami"):
@@ -968,23 +1144,7 @@ def format_bootstrap(result: BootstrapResult, reference: str) -> str:
                     f"{wins:.0%}",
                 ]
             )
-    what = (
-        f"re-running the whole pipeline on {result.frac:.0%} of the columns"
-        if result.mode == "subsample"
-        else f"re-scoring fixed partitions on {result.frac:.0%} of the columns"
-    )
-    lines = [
-        f"Bootstrap, {result.n_boot} resamples, {what}.",
-        "Point estimates are on the full dataset; intervals are percentile 95%.",
-        render_table(BOOTSTRAP_COLUMNS, rows),
-        "",
-        "Paired differences (same resamples for every configuration):",
-        render_table(DIFF_COLUMNS, diffs),
-        "",
-        "A difference is real at 95% when its interval excludes zero. 'wins' is the",
-        "share of resamples in which the configuration beat the reference.",
-    ]
-    return "\n".join(lines)
+    return render_table(DIFF_COLUMNS, diffs)
 
 
 def evaluate_late_fusion(

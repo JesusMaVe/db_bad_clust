@@ -833,6 +833,94 @@ Lectura:
   de tabla entera y `reserved_words`. Requiere decidir cómo se etiqueta y se puntúa una tabla, y solo
   hay 23 tablas, así que la evaluación de ese nivel tendrá poca potencia estadística.
 
+
+### Candidato #8 (2026-09-19): diseño en dos niveles — columnas y tablas
+
+La sección anterior mostró que un solo clustering de columnas no puede servir a la vez a los
+anti-patrones de columna, que cruzan tablas, y a los de tabla, que viven dentro de una. Este
+candidato separa los dos niveles.
+
+#### Diseño
+
+- **Nivel de columna.** Es el fusionado de conflicto con Ward y k por silueta, sin cambios.
+- **Nivel de tabla.** Cada tabla se describe con 6 medidas de BERT (MiniLM) sobre los nombres de sus
+  columnas: vacío semántico medio, divergencia interna media, atípico medio, choque máximo,
+  heterogeneidad, y proporción de columnas cuyo nombre contradice su tipo
+  (`features/name_signals.py`). Una tabla es anómala si su distancia a la tabla mediana supera la
+  valla de Tukey, Q3 + 1.5·IQR. Las tablas anómalas se agrupan entre sí por enlace simple, cortado
+  en esa misma valla (`clustering/table_level.py`). Nada ahí ve una etiqueta.
+- **Combinación.** Una columna de una tabla normal conserva su cluster de columna. Una columna de
+  una tabla anómala toma el grupo de su tabla, porque el anti-patrón es de la tabla.
+- **Etiquetas de tabla, solo para puntuar el nivel de tabla.** Se derivan de las etiquetas de
+  columna: una tabla recibe la etiqueta no-clean más frecuente si cubre al menos la mitad de sus
+  columnas. Salen 2 `giant_table`, 2 `inconsistent_naming`, 1 `eav`, 1 `reserved_words` y 17
+  tablas sin anti-patrón de tabla. No se escribió ninguna etiqueta nueva.
+
+`cli experiment --two-level` lo reporta, y `--bootstrap` lo incluye cuando el pickle trae
+`e_name`/`name_intrinsic`.
+
+#### La regla del nivel de tabla, y cuántas se probaron
+
+Se probaron cuatro variantes, en este orden. Se declara porque es una elección hecha mirando
+resultados:
+
+1. **Ward sobre tablas, con k por silueta, y el cluster mayor como "normal".** Falló sin gigantes:
+   la silueta eligió 6 o 7 clusters y 11 de 21 tablas quedaron como anómalas. ARI 0.07.
+2. **Valla de Tukey, cada tabla anómala en su propio grupo.** Separó las dos tablas gigantes, que
+   son el mismo anti-patrón. ARI completo 0.393.
+3. **Valla de Tukey, con las anómalas unidas por enlace simple cortado en la valla.** Es la regla
+   adoptada.
+4. **Exclusión de tablas con menos de 3 columnas** (`MIN_TABLE_COLUMNS`). Se añadió al ver el
+   bootstrap. Una tabla sin hermanos tiene señales de hermanos iguales a cero por construcción, un
+   valor extremo que es un artefacto. Antes de esta regla, 23 de las tablas marcadas en las
+   submuestras tenían 1 o 2 columnas, y las dos gigantes quedaban juntas en 31 de 60 submuestras.
+   Después, en 44 de 60. **En el corpus completo no cambia ninguna cifra**, porque ninguna tabla
+   tiene menos de 3 columnas.
+
+#### Resultados
+
+Sobre los datos completos, media de 3 redacciones, todo elegido a ciegas:
+
+| corpus       | configuración        |    ARI |    AMI | ARI~tbl | tablas marcadas                    |
+| ------------ | -------------------- | -----: | -----: | ------: | ---------------------------------- |
+| sin gigantes | documento            | 0.0505 | 0.2105 |   0.867 | —                                  |
+| sin gigantes | conflicto plano      | 0.1256 | 0.2004 |   0.002 | —                                  |
+| sin gigantes | **dos niveles**      | 0.1416 | 0.2447 |   0.037 | `TBL_DATOS`                        |
+| completo     | documento            | 0.3659 | 0.4522 |   0.963 | —                                  |
+| completo     | conflicto plano      | 0.3561 | 0.3729 |   0.380 | —                                  |
+| completo     | **dos niveles**      | 0.6479 | 0.5020 |   0.468 | `BACKUP_DATOS` + `TABLA_BASE_DATOS` |
+
+Las tres redacciones marcan las mismas tablas. El nivel de tabla, puntuado contra las etiquetas de
+tabla derivadas, da ARI 0.305 sin gigantes y 0.386 en el corpus completo.
+
+**Bootstrap pareado** (500 submuestras del 80 %, pipeline ciego completo en cada una), dos niveles
+menos conflicto plano:
+
+| corpus       | Δ ARI [IC 95 %]          | gana | Δ AMI [IC 95 %]          | gana |
+| ------------ | ------------------------ | ---: | ------------------------ | ---: |
+| sin gigantes | +0.004 [-0.012, +0.020]  |  50 % | +0.014 [-0.013, +0.051] |  54 % |
+| completo     | +0.169 [-0.031, +0.328]  |  83 % | +0.086 [+0.000, +0.169] |  90 % |
+
+Contra el documento, en el corpus completo: ARI +0.158 [-0.055, +0.300], con el 85 % de victorias,
+y AMI +0.012 [-0.099, +0.088].
+
+#### Lectura
+
+- **Sin gigantes, el nivel de tabla no aporta nada demostrable.** La subida de 0.126 a 0.142 sobre
+  los datos completos depende de marcar `TBL_DATOS`, y eso solo ocurre en parte de las submuestras.
+  Con las otras tablas objetivo (`CONFIGURACION`, `ORDENES_COMPRA`, `REPORTES`) las señales de
+  nombre no alcanzan: nunca cruzan la valla.
+- **En el corpus completo la mejora es grande cuando ocurre, pero no es significativa al 95 %.** Es
+  bimodal: si las dos tablas gigantes caen en el mismo grupo, el ARI salta a ~0.65; si no, se queda
+  en el nivel del conflicto plano. Gana en el 83 % de las submuestras en ARI y en el 90 % en AMI, y
+  el intervalo de AMI toca el cero exactamente. La mejora es probable, no demostrada.
+- **Lo que sí aporta con claridad es interpretabilidad.** El diseño dice qué tablas tienen un
+  problema de tabla, cosa que el clustering plano no puede decir. Y lo hace con una regla sin
+  parámetros que ajustar.
+- **Decisión:** queda como opción (`algorithm="two-level"`, `--two-level`), no como comportamiento
+  por defecto. Para afirmar una mejora sin gigantes haría falta una señal de tabla que detecte `eav`
+  y la inconsistencia de nombres de `ORDENES_COMPRA`. Ninguna de las probadas lo hace.
+
 ---
 
 ## Referencias

@@ -40,6 +40,8 @@ def fixture_paths(tmp_path):
                 "e_rest": rng.normal(0, 1, (n, 3)),
                 "e_stat": rng.normal(0, 1, (n, 1)),
                 "e_conflict": e_conflict,
+                "e_name": rng.normal(0, 1, (n, 4)),
+                "name_intrinsic": np.column_stack([rng.uniform(0.2, 0.4, n), np.zeros(n)]),
                 "e_conflict_variants": {
                     "orig": e_conflict,
                     "W2": conflict_block(0.08),
@@ -234,3 +236,27 @@ class TestConflictFlags:
         assert "Bootstrap, 3 resamples" in out
         assert "95% CI" in out
         assert "conflict mean / ward - document / ward" in out
+
+
+    def test_two_level_prints_the_table_level_and_robustness(self, fixture_paths, capsys):
+        pickle_path, labels_path = fixture_paths
+        args = ["experiment", "--pickle", pickle_path, "--labels", labels_path]
+        assert main([*args, "--two-level"]) == 0
+        out = capsys.readouterr().out
+        assert "two-level" in out
+        assert "Table level: 2 tables" in out
+        assert "conflict fused / two-level" in out
+
+    def test_two_level_without_name_signals_is_refused_with_a_hint(
+        self, fixture_paths, tmp_path, capsys
+    ):
+        pickle_path, labels_path = fixture_paths
+        with open(pickle_path, "rb") as fh:
+            data = pickle.load(fh)
+        del data["e_name"]
+        bare = tmp_path / "nonames.pkl"
+        with open(bare, "wb") as fh:
+            pickle.dump(data, fh)
+        args = ["experiment", "--pickle", str(bare), "--labels", labels_path]
+        assert main([*args, "--two-level"]) == 1
+        assert "from-pickle" in capsys.readouterr().err

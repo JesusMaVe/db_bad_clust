@@ -36,6 +36,9 @@ entrypoint shebangs are stale.
     --ablation output/intermediate_02.pkl output/intermediate_docs.pkl
 .venv/bin/python -m db_bad_clust.cli experiment --without-giants \
     --pickle output/intermediate_docs.pkl --conflict --robustness
+# Two levels: columns by conflict, tables by BERT naming signals
+.venv/bin/python -m db_bad_clust.cli experiment --without-giants \
+    --pickle output/intermediate_docs.pkl --two-level
 # 95% intervals and paired differences (~0.8 s per resample)
 .venv/bin/python -m db_bad_clust.cli experiment --without-giants \
     --pickle output/intermediate_docs.pkl --bootstrap 500
@@ -47,7 +50,7 @@ entrypoint shebangs are stale.
 ```
 
 ```bash
-.venv/bin/python -m pytest tests/ -v      # 520 tests, no DB required
+.venv/bin/python -m pytest tests/ -v      # 546 tests, no DB required
 .venv/bin/python -m ruff check src tests scripts   # lint-clean
 ```
 
@@ -62,8 +65,10 @@ src/db_bad_clust/
 ├── cli.py         `experiment` — the surface that produces every reported number
 ├── data/          Oracle in, dataclasses out: db_connector, schema_extractor
 ├── features/      text_preprocessor (+ build_document), structural_encoder,
-│                  bert_embedder, semantic_anchors, feature_builder
-├── clustering/    dimensionality_reducer, cluster_engine
+│                  bert_embedder, semantic_anchors (+ ConflictBlock),
+│                  name_signals, table_aggregates, feature_builder
+├── clustering/    dimensionality_reducer, cluster_engine, late_fusion,
+│                  table_level (Tukey fence over tables)
 ├── evaluation/    cluster_scoring (both rulers), experiments (sweeps, ablations,
 │                  diagnostics), validation (ARI/NMI), ml_baselines
 └── generation/    anti_patterns (table/column comments), ground_truth (loads +
@@ -158,6 +163,12 @@ candidatos #6 and #7.
   same way. The name reader is the bottleneck: three wordings agree on 58-67% of columns.
 - **Quote the mean over anchor wordings, not the default wording.** The default was chosen while
   looking at the labelled score. `--robustness` prints all three and the mean.
+- **The two-level design is an option, not the default.** Tables are flagged by BERT naming
+  signals with a Tukey fence (`clustering/table_level.py`); a column of a flagged table takes its
+  table's group. Bootstrap against the flat conflict clustering: nothing without the giants (ARI
+  +0.004 [-0.012, +0.020]); large but not significant on the full corpus (ARI +0.169 [-0.031,
+  +0.328]), bimodal on whether the two giant tables are grouped together. Tables with fewer than
+  3 columns are never judged: their sibling signals are zero by construction.
 - **Choose every hyper-parameter blind and quote ARI~tbl.** `evaluate_blind` picks Ward's k by
   silhouette (2..30) or HDBSCAN's cell by `relative_validity_`, with noise reassigned by kNN. A
   high ARI against the table means the clustering found tables, not anti-patterns.

@@ -28,6 +28,9 @@ Usa `.venv/bin/python -m <cmd>` — los shebangs del venv están obsoletos (la c
 # La representación de conflicto, todo elegido a ciegas, y su robustez ante el fraseo de las anclas
 .venv/bin/python -m db_bad_clust.cli experiment --without-giants \
     --pickle output/intermediate_docs.pkl --conflict --robustness
+# Dos niveles: columnas por conflicto, tablas por señales de nombre de BERT
+.venv/bin/python -m db_bad_clust.cli experiment --without-giants \
+    --pickle output/intermediate_docs.pkl --two-level
 # Intervalos de confianza al 95 % y diferencias pareadas (~0.8 s por remuestreo)
 .venv/bin/python -m db_bad_clust.cli experiment --without-giants \
     --pickle output/intermediate_docs.pkl --bootstrap 500
@@ -236,6 +239,17 @@ el 0.5031 de α=0 no es lo que parece.
   de una. Un solo clustering plano de columnas no sirve a las dos. La vía que queda es un diseño en
   dos niveles (columnas y tablas).
 
+- **Diseño en dos niveles (candidato #8): opción, no defecto.** Columnas por conflicto (Ward) y
+  tablas por 6 medidas de BERT sobre sus nombres (`features/name_signals.py`), con la valla de
+  Tukey y sin parámetros (`clustering/table_level.py`). Una columna de una tabla anómala toma el
+  grupo de su tabla. Datos completos, media de 3 redacciones: sin gigantes 0.1416 / 0.2447 (marca
+  `TBL_DATOS`); completo 0.6479 / 0.5020 (marca las dos gigantes juntas). Bootstrap contra el
+  conflicto plano: **sin gigantes no aporta nada** (ARI +0.004 [-0.012, +0.020]); **completo, grande
+  pero no significativo** (ARI +0.169 [-0.031, +0.328], AMI +0.086 [+0.000, +0.169]), porque es
+  bimodal según si las gigantes caen juntas. Las tablas con menos de 3 columnas no se juzgan: sus
+  señales de hermanos son cero por construcción. Se probaron 4 variantes de la regla, declaradas en
+  el doc.
+
 - **Una diferencia se afirma solo con su intervalo pareado** (`--bootstrap N`). Ambos modos
   submuestrean sin reemplazo: con reemplazo, las columnas duplicadas inflan ARI y AMI.
 
@@ -251,7 +265,7 @@ el 0.5031 de α=0 no es lo que parece.
 ## Tests y lint
 
 ```bash
-.venv/bin/python -m pytest tests/ -v      # 520 tests, sin BD y sin descargar el modelo
+.venv/bin/python -m pytest tests/ -v      # 546 tests, sin BD y sin descargar el modelo
 .venv/bin/python -m ruff check src tests scripts   # lint-clean
 ```
 

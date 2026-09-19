@@ -39,9 +39,11 @@ def _experiment(args: argparse.Namespace) -> int:
         format_blind_table,
         format_bootstrap,
         format_diagnostics,
+        format_paired_differences,
         format_robustness,
         format_stability,
         format_table,
+        format_two_level,
         load_dataset,
         mean_over_wordings_scorer,
         robustness_over_wordings,
@@ -88,7 +90,7 @@ def _experiment(args: argparse.Namespace) -> int:
             )
         )
 
-    if args.conflict or args.stability or args.robustness or args.bootstrap:
+    if args.conflict or args.stability or args.robustness or args.bootstrap or args.two_level:
         if dataset.e_conflict is None:
             print(
                 f"error: {args.pickle} carries no 'e_conflict' block — rebuild it with "
@@ -97,7 +99,7 @@ def _experiment(args: argparse.Namespace) -> int:
             )
             return 1
 
-    if (args.robustness or args.bootstrap) and not dataset.e_conflict_variants:
+    if (args.robustness or args.bootstrap or args.two_level) and not dataset.e_conflict_variants:
         print(
             f"error: {args.pickle} carries no 'e_conflict_variants' — rebuild it with "
             "scripts/build_embeddings.py (--from-pickle works without Oracle)",
@@ -133,6 +135,29 @@ def _experiment(args: argparse.Namespace) -> int:
             print(f"Robustness over anchor wordings — conflict fused / {algorithm}")
             print(format_robustness(robustness_over_wordings(dataset, CONFLICT_FUSED, algorithm)))
 
+    has_names = dataset.e_name is not None and dataset.name_intrinsic is not None
+    if args.two_level:
+        if not has_names:
+            print(
+                f"error: {args.pickle} carries no 'e_name'/'name_intrinsic' — rebuild it with "
+                "scripts/build_embeddings.py (--from-pickle works without Oracle)",
+                file=sys.stderr,
+            )
+            return 1
+        print()
+        print("Two levels: columns by conflict, tables by BERT naming (Tukey fence)")
+        runs = [
+            ("document (alpha=1)", evaluate_blind("d", dataset, weights_for(1.0), "ward")),
+            ("conflict fused", evaluate_blind("c", dataset, CONFLICT_FUSED, "ward")),
+            ("conflict fused", evaluate_blind("t", dataset, CONFLICT_FUSED, "two-level")),
+        ]
+        print(format_blind_table(runs))
+        print()
+        print(format_two_level(runs[2][1]))
+        print()
+        print("Robustness over anchor wordings — conflict fused / two-level")
+        print(format_robustness(robustness_over_wordings(dataset, CONFLICT_FUSED, "two-level")))
+
     if args.bootstrap:
         print()
         scorers = {
@@ -141,10 +166,18 @@ def _experiment(args: argparse.Namespace) -> int:
             "conflict mean / ward": mean_over_wordings_scorer(CONFLICT_FUSED, "ward"),
             "conflict mean / hdbscan": mean_over_wordings_scorer(CONFLICT_FUSED, "hdbscan"),
         }
+        if has_names:
+            scorers["two-level mean"] = mean_over_wordings_scorer(CONFLICT_FUSED, "two-level")
         result = bootstrap_compare(
             dataset, scorers, n_boot=args.bootstrap, frac=args.bootstrap_frac, seed=0
         )
         print(format_bootstrap(result, "document / ward"))
+        if has_names:
+            print()
+            print("Does the table level add anything over the flat conflict clustering?")
+            print(
+                format_paired_differences(result, "conflict mean / ward", names=["two-level mean"])
+            )
 
     if args.stability:
         print()
@@ -257,6 +290,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="re-run the blind conflict evaluation once per anchor wording and report "
         "the mean — the number to quote",
+    )
+    experiment.add_argument(
+        "--two-level",
+        action="store_true",
+        help="columns clustered by conflict, tables flagged by BERT naming signals; "
+        "a column of an anomalous table takes its table's group",
     )
     experiment.add_argument(
         "--bootstrap",

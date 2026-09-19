@@ -58,8 +58,13 @@ el fraseo por defecto se eligió mirando el ARI.
     --pickle output/intermediate_docs.pkl --conflict --robustness
 ```
 
+Un diseño en dos niveles, con columnas por conflicto y tablas marcadas por señales de nombre de
+BERT, llega a ARI 0.648 en el corpus completo porque agrupa las dos tablas gigantes. El bootstrap
+no confirma esa mejora al 95 %, y sin gigantes no aporta nada. Queda como opción:
+`cli experiment --two-level`.
+
 Detalle, robustez y resultados negativos en `docs/research_improving_clustering.md`, candidatos #6
-y #7.
+a #8.
 
 *Accuracy y F1 de un clustering usan nombrado por voto mayoritario, que consulta la verdad de
 terreno: son cota superior, no marca alcanzada.*
@@ -116,7 +121,7 @@ sobre las 243 etiquetas, no reglas — ver AGENTS.md):
 ```
 
 ```bash
-.venv/bin/python -m pytest tests/ -v       # 520 tests, sin BD ni descarga del modelo
+.venv/bin/python -m pytest tests/ -v       # 546 tests, sin BD ni descarga del modelo
 ```
 
 `AGENTS.md` tiene el detalle completo: invariantes, ablaciones y limitaciones medidas.
