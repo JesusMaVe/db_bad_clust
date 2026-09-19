@@ -1,141 +1,81 @@
-# db_bad_clust — detección no supervisada de anti-patrones de esquema Oracle
+# db_bad_clust
 
-Agrupa las columnas de una base Oracle en anti-patrones de diseño **sin etiquetas**, usando
-embeddings de oraciones (BERT multilingüe) sobre una descripción en lenguaje natural de cada
-columna, fusionados con características estructurales.
+Detección no supervisada de anti-patrones de diseño en esquemas Oracle, con embeddings de BERT y
+clustering.
 
-> **Dos ramas.** `main` es la investigación (esta). La rama **`rule-engine`** contiene el motor
-> de reglas heurístico y el producto de auditoría Oracle (`cli audit`, SQL correctivo). Son
-> trabajos distintos con objetivos distintos; no se mezclan.
+## Enfoque
 
-## La idea
+Un anti-patrón como `wrong_data_types` es un conflicto entre lo que el nombre de una columna
+promete y lo que su tipo declara: `FECHA_INGRESO` guardada como `VARCHAR2`. El pipeline usa un
+encoder de oraciones multilingüe (`paraphrase-multilingual-MiniLM-L12-v2`) para leer qué tipo de
+dato sugiere el nombre, lo contrasta con el tipo declarado y agrupa las columnas con Ward.
 
-Un anti-patrón como `wrong_data_types` es una **discordancia**: la columna se llama
-`FECHA_INGRESO` pero está declarada `VARCHAR2(20)`. Detectarla requiere leer las dos mitades a
-la vez. El pipeline le da al encoder una frase que contiene ambas:
-
-```
-tabla empleados, columna fecha ingreso, tipo texto de longitud variable
-de hasta 20 caracteres, admite nulos. La tabla contiene: ...
-```
-
-y agrupa los vectores resultantes. La verdad de terreno son 243 columnas etiquetadas a mano
-(`output/manual_labels.csv`), que el pipeline nunca ve.
+Ningún paso ve las etiquetas: los hiperparámetros se eligen con criterios internos. Las 243
+columnas etiquetadas a mano en `output/manual_labels.csv` solo se usan para puntuar el resultado.
 
 ## Resultados
 
-Sobre las 153 columnas que quedan al excluir las dos tablas gigantes — `giant_table` es
-propiedad *de la tabla*, no de la columna, así que dejarla dentro premia la fuga de identidad
-de tabla en vez de la separación de anti-patrones. α = 1.00:
+Evaluación sobre 153 columnas, sin las dos tablas gigantes, cuya etiqueta es propiedad de la tabla
+y no de la columna. Diferencias medidas con un bootstrap pareado de 500 submuestras.
 
-| representación                |     ARI |    NMI |    AMI | Accuracy | F1-macro |
-| ----------------------------- | ------: | -----: | -----: | -------: | -------: |
-| solo estructura (α=0)         |  0.0657 | 0.2432 | 0.1212 |   0.6078 |   0.2002 |
-| embedding del nombre (previo) | -0.0538 | 0.2043 | 0.0747 |   0.5425 |   0.1346 |
-| **documento de columna**      |  0.0802 | 0.3788 | 0.2553 |   0.6797 |   0.3781 |
+| representación             |   ARI |   AMI | ARI contra la tabla |
+| -------------------------- | ----: | ----: | ------------------: |
+| descripción de la columna  | 0.051 | 0.211 |               0.867 |
+| conflicto nombre–tipo      | 0.126 | 0.200 |               0.002 |
 
-Sobre el corpus completo (243 columnas), el documento sube AMI de 0.3619 a **0.4818**, accuracy
-de 0.7119 a **0.7984** y F1-macro de 0.2670 a **0.4622**.
+- La representación de conflicto mejora el ARI en +0.073, con un intervalo de confianza del 95 %
+  de +0.042 a +0.106. En AMI empatan.
+- La descripción de la columna agrupa sobre todo por tabla. El conflicto agrupa anti-patrones que
+  cruzan tablas.
+- En el corpus completo, la descripción es mejor en AMI porque reconoce las dos tablas gigantes.
 
-**Actualización (candidato #6): los clusters del documento son las tablas.** Sin gigantes, su
-partición tiene ARI 0.593 contra la tabla de cada columna. La representación de conflicto mide
-con BERT qué espera el *nombre* y le resta lo que declara el *tipo*. El clustering es Ward, con k
-elegido por silueta sin mirar etiquetas. En las mismas 153 columnas:
-
-| representación                    | ARI    | AMI    | ARI contra la tabla |
-| --------------------------------- | -----: | -----: | ------------------: |
-| documento                         | 0.0505 | 0.2105 |               0.867 |
-| **conflicto, media de 3 fraseos** | 0.1256 | 0.2004 |               0.002 |
-| conflicto, fraseo por defecto     | 0.1693 | 0.2464 |               0.006 |
-
-Con un bootstrap pareado de 500 submuestras, la mejora en ARI de la media es +0.073, con intervalo
-de confianza al 95 % de +0.042 a +0.106. En AMI hay empate. En el corpus completo el documento es
-mejor en AMI, porque reconoce las dos tablas gigantes. La cifra a citar es la media sobre fraseos:
-el fraseo por defecto se eligió mirando el ARI.
-
-```bash
-.venv/bin/python -m db_bad_clust.cli experiment --without-giants \
-    --pickle output/intermediate_docs.pkl --conflict --robustness
-```
-
-Un diseño en dos niveles, con columnas por conflicto y tablas marcadas por señales de nombre de
-BERT, llega a ARI 0.648 en el corpus completo porque agrupa las dos tablas gigantes. El bootstrap
-no confirma esa mejora al 95 %, y sin gigantes no aporta nada. Queda como opción:
-`cli experiment --two-level`.
-
-Detalle, robustez y resultados negativos en `docs/research_improving_clustering.md`, candidatos #6
-a #8.
-
-*Accuracy y F1 de un clustering usan nombrado por voto mayoritario, que consulta la verdad de
-terreno: son cota superior, no marca alcanzada.*
-
-*Estos son los números históricos, con la base Oracle original (nunca versionada). Ese esquema
-no es recuperable; `sql_init/` reconstruye uno fiel en nombres/tipos/semántica desde
-`output/manual_labels.csv` (ver "Uso" abajo), con el que los números divergen un poco — el
-detalle completo, incluyendo qué tan cerca queda cada representación, está en AGENTS.md.*
-
-### Tres hallazgos que cambiaron la conclusión
-
-1. **El peso α no ponderaba nada.** La normalización z-score por dimensión deja la varianza
-   total de un bloque igual a su número de dimensiones (384 contra 18). Con α nominal 0.15 los
-   embeddings se quedaban el **89%** del espacio. La conclusión previa de que "BERT estorba"
-   comparaba *sin embeddings* contra *embeddings y casi nada más*.
-
-2. **El baseline estructural no distingue las columnas.** Con α=0, 243 columnas colapsan en
-   **24 vectores distintos** (el mayor grupo tiene 108). Dos columnas con el mismo vector no
-   pueden recibir etiquetas distintas de ningún algoritmo. Su ARI tampoco es reproducible:
-   **0.1877 en float32 contra 0.5031 en float64**.
-
-3. **El embedding leía un sintagma sin tipo.** `"empleados: fecha nacimiento"` no permite
-   distinguir un DATE de un VARCHAR2. Con el nombre solo, el embedding daba ARI **negativo**.
+El detalle, los resultados negativos y la metodología están en
+[`docs/research_improving_clustering.md`](docs/research_improving_clustering.md).
 
 ## Uso
+
+Requiere Python 3.10+ y Docker para la base Oracle.
 
 ```bash
 .venv/bin/python -m pip install -e ".[dev]"
 
-# Primera vez / volumen Oracle nuevo: bootstrap del esquema sintético
-.venv/bin/python scripts/generate_schema_sql.py    # escribe sql_init/001_bad_schema.sql
-docker compose up -d                               # lo aplica en un volumen nuevo
-.venv/bin/python scripts/verify_schema.py           # confirma 23 tablas / 243 columnas
-
-.venv/bin/python -m db_bad_clust.cli experiment --sweep
+# Evaluar, sin base de datos
 .venv/bin/python -m db_bad_clust.cli experiment --without-giants \
-    --ablation output/intermediate_02.pkl output/intermediate_docs.pkl
-```
+    --pickle output/intermediate_docs.pkl --conflict --robustness
 
-Reconstruir los embeddings desde Oracle:
+# Intervalos de confianza (varios minutos)
+.venv/bin/python -m db_bad_clust.cli experiment --without-giants \
+    --pickle output/intermediate_docs.pkl --bootstrap 500
 
-```bash
-.venv/bin/python scripts/apply_comments.py                  # una vez: comentarios en la BD
-.venv/bin/python scripts/build_embeddings.py --dry-run      # ver los documentos
+# Reconstruir las representaciones desde Oracle
+.venv/bin/python scripts/generate_schema_sql.py   # solo con un volumen nuevo
+docker compose up -d
+.venv/bin/python scripts/verify_schema.py
+.venv/bin/python scripts/apply_comments.py
 .venv/bin/python scripts/build_embeddings.py --output output/intermediate_docs.pkl
+
+# Tests y lint
+.venv/bin/python -m pytest tests/
+.venv/bin/python -m ruff check src tests scripts
 ```
 
-Puntaje de salud del esquema + recomendaciones estructurales por columna (RandomForest entrenado
-sobre las 243 etiquetas, no reglas — ver AGENTS.md):
+## Estructura
 
-```bash
-.venv/bin/python -m db_bad_clust.cli score                        # auto-chequeo, out-of-fold
-.venv/bin/python -m db_bad_clust.cli score --target otra_base.pkl # una base Oracle distinta
+```
+src/db_bad_clust/
+├── data/         extracción de metadatos Oracle
+├── features/     representaciones: documento, conflicto, señales de nombre
+├── clustering/   reducción, clustering y nivel de tabla
+└── evaluation/   puntuación, experimentos y bootstrap
+scripts/          construcción de embeddings y esquema de prueba
 ```
 
-```bash
-.venv/bin/python -m pytest tests/ -v       # 546 tests, sin BD ni descarga del modelo
-```
-
-`AGENTS.md` tiene el detalle completo: invariantes, ablaciones y limitaciones medidas.
-`docs/research_improving_clustering.md` documenta los intentos de mejora sobre el resultado
-central (hiperparámetros de HDBSCAN, modelos de embeddings alternativos, UMAP, features
-agregadas por tabla) — con fuentes primarias citadas y resultados medidos, positivos y negativos.
+La rama `rule-engine` contiene un motor de reglas y la herramienta de auditoría, fuera del alcance
+de esta rama. [`AGENTS.md`](AGENTS.md) documenta los invariantes y decisiones del proyecto.
 
 ## Limitaciones
 
-- Un corpus: 23 tablas, 243 columnas, una sola base sintética en español. Los números no se
-  transfieren sin más a otro esquema.
-- Clases muy desbalanceadas: `giant_table` es el 37% del corpus y `self_referencing` tiene una
-  sola columna.
-- `impossible_data` no es detectable desde el metadata en esta base: no hay constraints R y las
-  claves padre tienen duplicados y nulos, así que las FK no pueden ni crearse.
-- Las anclas semánticas (12 dimensiones interpretables) **pierden** contra las 384 crudas como
-  representación de agrupamiento. Se conservan como explicación por columna, no como mejora.
+- Un solo corpus sintético: 23 tablas y 243 columnas, en español.
+- Clases desbalanceadas: `giant_table` es el 37 % de las columnas y `self_referencing` tiene una.
+- Los anti-patrones propios de la tabla (`eav`, nombres inconsistentes en toda una tabla) no se
+  detectan de forma demostrable. El diseño en dos niveles (`--two-level`) es experimental.
