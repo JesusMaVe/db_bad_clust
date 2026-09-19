@@ -47,14 +47,14 @@ def scale_conflict_subblocks(raw: np.ndarray) -> np.ndarray:
     """Scale the raw conflict block sub-block by sub-block, not dimension by dimension.
 
     `ConflictBlock.build` returns [expectation - declared (6) | declared (6) |
-    confidence (1)]. Z-scoring those 13 columns individually, as `_normalize` does
+    confidence (1) | unbacked_reference (1)]. Z-scoring those 13 columns individually, as `_normalize` does
     for every other block, hands the sparse indicator columns of `declared`
     (`reference`, `boolean`: a handful of ones) z-scores of ±6 and lets them
     dominate every distance — measured, that variant collapses HDBSCAN to k≈5
     and ARI 0 on the corpus. Each sub-block is therefore z-scored, scaled to
     unit total variance and multiplied by its own weight (CONFLICT_SUBBLOCKS),
     so the geometry is the one that was actually found to cluster:
-    diff 1.0 : declared 0.7 : confidence 0.5.
+    diff 1.0 : declared 0.7 : confidence 0.5 : unbacked_reference 0.7.
     """
     if raw.shape[1] != CONFLICT_DIM:
         raise ValueError(f"conflict block must have {CONFLICT_DIM} columns, got {raw.shape[1]}")

@@ -50,7 +50,7 @@ entrypoint shebangs are stale.
 ```
 
 ```bash
-.venv/bin/python -m pytest tests/ -v      # 546 tests, no DB required
+.venv/bin/python -m pytest tests/ -v      # 568 tests, no DB required
 .venv/bin/python -m ruff check src tests scripts   # lint-clean
 ```
 
@@ -120,13 +120,13 @@ clustering is Ward with k chosen by silhouette. Everything is chosen blind. On 1
 | representation                    | ARI    | AMI    | ARI vs table |
 | --------------------------------- | -----: | -----: | -----------: |
 | document                          | 0.0505 | 0.2105 |        0.867 |
-| **conflict, mean of 3 wordings**  | 0.1256 | 0.2004 |        0.002 |
-| conflict, default wording         | 0.1693 | 0.2464 |        0.006 |
+| **conflict, mean of 3 wordings**  | 0.1234 | 0.1967 |        0.003 |
+| conflict, default wording         | 0.1683 | 0.2488 |        0.007 |
 
 A paired bootstrap (500 subsamples of 80% of the columns, whole blind pipeline re-run each
 time) settles what is real. Without the giants, the ARI gain of the mean over wordings is
-**+0.073 [95% CI +0.042, +0.106]**, winning in 100% of resamples; the AMI difference is a tie,
-[-0.053, +0.061]. On the full corpus the document is **better** in AMI by about 0.07 (interval
+**+0.072 [95% CI +0.040, +0.104]**, winning in 100% of resamples; the AMI difference is a tie,
+[-0.059, +0.055]. On the full corpus the document is **better** in AMI by about 0.07 (interval
 excludes zero) and ties in ARI, because it recognises the two giant tables. So the claim is: on
 the columns a per-column method can see, the conflict representation groups by anti-pattern
 better than the document, without table leakage. The 0.1107 quoted above for the document was
@@ -169,6 +169,12 @@ candidatos #6 and #7.
   +0.004 [-0.012, +0.020]); large but not significant on the full corpus (ARI +0.169 [-0.031,
   +0.328]), bimodal on whether the two giant tables are grouped together. Tables with fewer than
   3 columns are never judged: their sibling signals are zero by construction.
+- **Any Oracle schema, not just the connected user's.** The extractor reads `ALL_*` views filtered
+  by `owner`; without one it uses the session user and reproduces the old `USER_*` extraction
+  exactly. Flags are recognised the way Oracle stores them (`NUMBER(1)`, `CHAR(1)`,
+  `VARCHAR2(1)`, 23ai `BOOLEAN`), with length in characters. A name that reads as a reference on
+  a column with no FK is not a type conflict: it sets `unbacked_reference`, the 14th column of the
+  conflict block. A primary key is never a conflict or a finding.
 - **Choose every hyper-parameter blind and quote ARI~tbl.** `evaluate_blind` picks Ward's k by
   silhouette (2..30) or HDBSCAN's cell by `relative_validity_`, with noise reassigned by kNN. A
   high ARI against the table means the clustering found tables, not anti-patterns.

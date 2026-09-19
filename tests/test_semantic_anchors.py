@@ -239,12 +239,52 @@ class TestDeclaredFamily:
         assert d[_idx("boolean")] == 0.0
         assert d[_idx("text")] == 1.0
 
+    def test_number_1_is_amount_and_boolean(self):
+        """Before 23ai Oracle had no boolean: NUMBER(1) is how most schemas store a flag."""
+        d = declared_family(_column(name="ACTIVO", data_type="NUMBER", data_precision=1, data_scale=0))
+        assert d[_idx("amount")] == 1.0
+        assert d[_idx("boolean")] == 1.0
+
+    def test_wider_or_decimal_numbers_are_not_flags(self):
+        for precision, scale in ((2, 0), (1, 1), (None, None)):
+            d = declared_family(
+                _column(data_type="NUMBER", data_precision=precision, data_scale=scale)
+            )
+            assert d[_idx("boolean")] == 0.0, (precision, scale)
+
+    def test_varchar2_of_one_character_is_a_flag(self):
+        d = declared_family(_column(data_type="VARCHAR2", data_length=1))
+        assert d[_idx("text")] == 1.0 and d[_idx("boolean")] == 1.0
+
+    def test_length_is_read_in_characters_not_bytes(self):
+        """CHAR(1) under character semantics in AL32UTF8: 4 bytes, 1 character."""
+        flag = declared_family(_column(data_type="CHAR", data_length=4, char_length=1))
+        wide = declared_family(_column(data_type="CHAR", data_length=4, char_length=4))
+        assert flag[_idx("boolean")] == 1.0
+        assert wide[_idx("boolean")] == 0.0
+
+    def test_native_boolean_is_the_boolean_family(self):
+        d = declared_family(_column(name="ACTIVO", data_type="BOOLEAN"))
+        assert d[_idx("boolean")] == 1.0
+        assert d.sum() == 1.0
+
+    def test_a_pickled_column_without_char_length_still_works(self):
+        """Pickles built before char_length existed carry no such attribute."""
+        col = _column(data_type="CHAR", data_length=1)
+        del col.char_length
+        assert declared_family(col)[_idx("boolean")] == 1.0
+
     def test_an_unknown_type_declares_nothing(self):
         assert declared_family(_column(data_type="XMLTYPE")).sum() == 0.0
 
     def test_layout_constants_agree(self):
-        assert CONFLICT_DIM == 2 * len(TYPE_FAMILIES) + 1
-        assert [name for name, _, _ in CONFLICT_SUBBLOCKS] == ["diff", "declared", "confidence"]
+        assert CONFLICT_DIM == 2 * len(TYPE_FAMILIES) + 2
+        assert [name for name, _, _ in CONFLICT_SUBBLOCKS] == [
+            "diff",
+            "declared",
+            "confidence",
+            "unbacked_reference",
+        ]
         assert tuple(TYPE_FAMILY_ANCHORS) == TYPE_FAMILIES
 
 
@@ -322,7 +362,8 @@ class TestConflictBuild:
     def test_soft_entropy_is_zero_for_a_sure_name_and_maximal_for_a_flat_one(self):
         block = ConflictBlock(FamilyStubEmbedder(routing={"fecha": "date"}), mode="soft")
         out = block.build(["fecha", "c3"], [_column(), _column()])
-        sure, flat = out[0, -1], out[1, -1]
+        confidence = 2 * len(TYPE_FAMILIES)
+        sure, flat = out[0, confidence], out[1, confidence]
         assert sure == pytest.approx(0.0, abs=1e-6)
         assert flat == pytest.approx(np.log(len(TYPE_FAMILIES)), abs=1e-6)
 
@@ -343,12 +384,12 @@ class TestHardConfidence:
         """Cosine 1 against its family and 0 against the rest: margin 1."""
         block = ConflictBlock(FamilyStubEmbedder(routing={"fecha": "date"}))
         out = block.build(["fecha alta"], [_column()])
-        assert out[0, -1] == pytest.approx(1.0)
+        assert out[0, 2 * len(TYPE_FAMILIES)] == pytest.approx(1.0)
 
     def test_margin_is_zero_for_a_name_equidistant_from_every_anchor(self):
         block = ConflictBlock(FamilyStubEmbedder())
         out = block.build(["c3"], [_column()])
-        assert out[0, -1] == pytest.approx(0.0)
+        assert out[0, 2 * len(TYPE_FAMILIES)] == pytest.approx(0.0)
 
     def test_hard_diff_for_a_date_stored_as_text(self):
         block = ConflictBlock(FamilyStubEmbedder(routing={"fecha": "date"}))
@@ -375,3 +416,45 @@ class TestAnchorVariants:
         for anchors in TYPE_FAMILY_ANCHOR_VARIANTS.values():
             out = ConflictBlock(FamilyStubEmbedder(), anchors=anchors).build(["x"], [_column()])
             assert out.shape == (1, CONFLICT_DIM)
+
+
+class TestUnbackedReference:
+    """A name that reads as a reference, on a column no foreign key backs."""
+
+    def _block(self, **column):
+        block = ConflictBlock(FamilyStubEmbedder(routing={"cliente": "reference"}))
+        return block.build(["cliente identificador"], [_column(name="CLIENTE_ID", **column)])[0]
+
+    def test_a_number_without_foreign_key_is_a_finding_not_a_type_conflict(self):
+        out = self._block(data_type="NUMBER")
+        assert np.allclose(out[: len(TYPE_FAMILIES)], 0.0)
+        assert out[-1] == 1.0
+
+    def test_text_without_foreign_key_is_a_finding_too(self):
+        out = self._block(data_type="VARCHAR2", data_length=20)
+        assert out[-1] == 1.0
+        assert np.allclose(out[: len(TYPE_FAMILIES)], 0.0)
+
+    def test_a_declared_foreign_key_is_not_a_finding(self):
+        """The declaration holds the reference; the -1 left on `amount` is the
+        multi-hot declaration (amount+reference), as before this change."""
+        out = self._block(data_type="NUMBER", is_foreign_key=True)
+        assert out[-1] == 0.0
+        assert out[_idx("reference")] == pytest.approx(0.0)
+
+    def test_a_primary_key_is_the_records_own_key(self):
+        out = self._block(data_type="NUMBER", is_primary_key=True)
+        assert out[-1] == 0.0
+        assert np.allclose(out[: len(TYPE_FAMILIES)], 0.0)
+
+    def test_a_reference_stored_as_a_date_is_still_a_type_conflict(self):
+        out = self._block(data_type="DATE")
+        assert out[-1] == 0.0
+        assert out[_idx("reference")] == pytest.approx(1.0)
+        assert out[_idx("date")] == pytest.approx(-1.0)
+
+    def test_a_name_that_is_not_a_reference_is_never_flagged(self):
+        block = ConflictBlock(FamilyStubEmbedder(routing={"fecha": "date"}))
+        out = block.build(["fecha alta"], [_column(data_type="VARCHAR2", data_length=20)])[0]
+        assert out[-1] == 0.0
+        assert out[_idx("date")] == pytest.approx(1.0)

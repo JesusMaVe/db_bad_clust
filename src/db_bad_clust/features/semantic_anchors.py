@@ -80,6 +80,10 @@ TYPE_CATEGORY: dict[str, str] = {
     "BLOB": "binary",
     "RAW": "binary",
     "BFILE": "binary",
+    # Oracle 23ai's native type. Before it, Oracle had no boolean type and
+    # flags were stored as NUMBER(1), CHAR(1) or VARCHAR2(1) — see
+    # `declared_family`, which reads those as boolean too.
+    "BOOLEAN": "boolean",
 }
 
 # Which storage families each concept can legitimately live in.
@@ -302,7 +306,13 @@ _CATEGORY_FAMILY: dict[str, str] = {
     "number": "amount",
     "text": "text",
     "binary": "binary",
+    "boolean": "boolean",
 }
+
+_TEXT_TYPES = frozenset({"CHAR", "NCHAR", "VARCHAR2", "VARCHAR", "NVARCHAR2"})
+_REFERENCE = TYPE_FAMILIES.index("reference")
+_AMOUNT = TYPE_FAMILIES.index("amount")
+_TEXT = TYPE_FAMILIES.index("text")
 
 # Layout of the raw conflict block `ConflictBlock.build` returns, in column
 # order: (name, width, internal weight). The weights are applied by
@@ -314,6 +324,10 @@ CONFLICT_SUBBLOCKS: tuple[tuple[str, int, float], ...] = (
     ("declared", len(TYPE_FAMILIES), 0.7),
     # Margin (hard mode) or entropy (soft mode): how sure the reader was.
     ("confidence", 1, 0.5),
+    # 1 where the name reads as a reference to another record but nothing
+    # declares it one — see `ConflictBlock.build`. Weight 0.7, like the other
+    # declaration indicators, fixed before it was measured.
+    ("unbacked_reference", 1, 0.7),
 )
 CONFLICT_DIM = sum(width for _, width, _ in CONFLICT_SUBBLOCKS)
 
@@ -321,11 +335,14 @@ CONFLICT_DIM = sum(width for _, width, _ in CONFLICT_SUBBLOCKS)
 def declared_family(column: ColumnMetadata) -> np.ndarray:
     """The storage families a column's declaration puts it in. Shape (6,), multi-hot.
 
-    The type gives one of date/amount/text/binary (none when unrecognised); a
-    foreign key adds `reference`; a CHAR of length 1 adds `boolean` — so a
-    NUMBER foreign key is amount+reference and an ACTIVO CHAR(1) is
-    text+boolean. Multi-hot on purpose: the conflict is measured against
-    everything the declaration can legitimately mean.
+    The type gives one of date/amount/text/binary/boolean (none when
+    unrecognised); a foreign key adds `reference`; the ways Oracle stored a
+    flag before 23ai add `boolean`: NUMBER(1) and text of one character
+    (CHAR(1), VARCHAR2(1), in characters, not bytes). So a NUMBER foreign key
+    is amount+reference, an ACTIVO CHAR(1) is text+boolean and an ACTIVO
+    NUMBER(1) is amount+boolean. Multi-hot on purpose: the conflict is
+    measured against everything the declaration can legitimately mean, and a
+    NUMBER(1) can hold a 0-9 code as well as a flag.
     """
     out = np.zeros(len(TYPE_FAMILIES), dtype=np.float64)
     family = _CATEGORY_FAMILY.get(category_of_type(column.data_type) or "")
@@ -333,9 +350,20 @@ def declared_family(column: ColumnMetadata) -> np.ndarray:
         out[TYPE_FAMILIES.index(family)] = 1.0
     if column.is_foreign_key:
         out[TYPE_FAMILIES.index("reference")] = 1.0
-    if (column.data_type or "").upper().strip() == "CHAR" and (column.data_length or 0) <= 1:
+    if _stores_a_flag(column):
         out[TYPE_FAMILIES.index("boolean")] = 1.0
     return out
+
+
+def _stores_a_flag(column: ColumnMetadata) -> bool:
+    """NUMBER(1), or text one character long — how pre-23ai Oracle stored a flag."""
+    oracle_type = (column.data_type or "").upper().strip()
+    if oracle_type == "NUMBER":
+        return column.data_precision == 1 and not column.data_scale
+    if oracle_type in _TEXT_TYPES:
+        length = getattr(column, "char_length", None) or column.data_length
+        return length is not None and 0 < length <= 1
+    return False
 
 
 class ConflictBlock:
@@ -396,10 +424,23 @@ class ConflictBlock:
         return weights / weights.sum(axis=1, keepdims=True)
 
     def build(self, names: list[str], columns: list[ColumnMetadata]) -> np.ndarray:
-        """The raw conflict block: [expectation - declared | declared | confidence]. Shape (N, 13).
+        """The raw conflict block. Shape (N, 14):
+        [expectation - declared | declared | confidence | unbacked_reference].
 
         confidence is the margin between the best and second-best cosine in
         hard mode, and the entropy of the expectation in soft mode.
+
+        A name that reads as a reference (CLIENTE_ID) on a column with no
+        foreign key is not a type error: a NUMBER or VARCHAR2 is exactly where
+        a key belongs. Many real schemas declare no foreign keys at all, and
+        counting each such column as a type conflict would bury the real ones.
+        So, when the expected family is `reference`:
+
+          - a primary key is the record's own key: no conflict, no finding;
+          - no foreign key, declared as number or text: no type conflict, and
+            `unbacked_reference` = 1, a finding of its own (on this corpus it
+            catches 3 of the 4 impossible_data columns);
+          - anything else (a reference stored as a date, say) stays a conflict.
 
         Raw and corpus-independent — no scaling happens here, so the block is
         portable between databases (health_report) and is normalised at fusion
@@ -424,4 +465,17 @@ class ConflictBlock:
             expected = np.exp(logits)
             expected /= expected.sum(axis=1, keepdims=True)
             confidence = -(expected * np.log(expected + 1e-12)).sum(axis=1, keepdims=True)
-        return np.hstack([expected - declared, declared, confidence])
+        diff = expected - declared
+        unbacked = np.zeros((len(columns), 1), dtype=np.float64)
+        reads_as_reference = sims.argmax(axis=1) == _REFERENCE
+        for i, column in enumerate(columns):
+            if not reads_as_reference[i]:
+                continue
+            if column.is_primary_key:
+                diff[i] = 0.0
+            elif not column.is_foreign_key and (
+                declared[i, _AMOUNT] or declared[i, _TEXT]
+            ):
+                diff[i] = 0.0
+                unbacked[i, 0] = 1.0
+        return np.hstack([diff, declared, confidence, unbacked])

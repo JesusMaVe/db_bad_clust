@@ -11,17 +11,27 @@ Purpose:
 
 Flow:
   1. Connect to Oracle (reuses OracleConnector)
-  2. Query data dictionary views (one bulk query per view):
-     - user_tables
-     - user_tab_cols (includes hidden/virtual/identity columns)
-     - user_constraints / user_cons_columns
-     - user_ind_columns
-     - user_tab_comments / user_col_comments
+  2. Query data dictionary views (one bulk query per view), all filtered by
+     the schema owner being analysed:
+     - all_tables
+     - all_tab_cols (includes hidden/virtual/identity columns)
+     - all_constraints / all_cons_columns
+     - all_ind_columns
+     - all_tab_comments / all_col_comments
+
+  ALL_* rather than USER_*: USER_* only ever shows the connected user's own
+  schema, so analysing an application schema meant logging in as its owner.
+  ALL_* shows every object the connected user has privileges on; `owner`
+  picks the schema. Without `owner` the connected user's schema is used,
+  which reproduces the USER_* behaviour exactly. The connected user needs no
+  data access — only metadata is read — but ALL_* lists a table only if the
+  user holds some privilege on it (SELECT is enough).
   3. Populate nested dataclasses: DatabaseSchema -> TableMetadata -> ColumnMetadata
   4. Serialize to dict/JSON for consumption by other modules
 
 Usage:
-  extractor = SchemaExtractor(connection)
+  extractor = SchemaExtractor(connection)                 # connected user's schema
+  extractor = SchemaExtractor(connection, owner="HR")    # any schema you can see
   schema = extractor.extract_all()
   for table in schema.tables:
       print(table.name, len(table.columns))
@@ -53,6 +63,10 @@ class ColumnMetadata:
     data_type: str
     nullable: bool
     data_length: int | None = None
+    # Declared length in characters. data_length is in bytes, so under
+    # character length semantics (NLS_LENGTH_SEMANTICS=CHAR, common with
+    # AL32UTF8) a CHAR(1) reports data_length 4 and char_length 1.
+    char_length: int | None = None
     data_precision: int | None = None
     data_scale: int | None = None
     is_primary_key: bool = False
@@ -124,9 +138,26 @@ class SchemaExtractor:
     same pattern as professional catalog tools like DataHub.
     """
 
-    def __init__(self, connection: oracledb.Connection) -> None:
+    def __init__(self, connection: oracledb.Connection, owner: str | None = None) -> None:
+        """
+        Args:
+            connection: an open Oracle connection.
+            owner: the schema to analyse. Unquoted Oracle identifiers are
+                stored in upper case, so it is upper-cased unless it was given
+                as a quoted identifier ("MixedCase"). None means the connected
+                user's own schema.
+        """
         self.connection = connection
         self.cursor = connection.cursor()
+        self._owner = _normalise_owner(owner) if owner is not None else None
+
+    @property
+    def owner(self) -> str:
+        """The schema being analysed, resolved from the session when not given."""
+        if self._owner is None:
+            self.cursor.execute("SELECT USER FROM dual")
+            self._owner = self.cursor.fetchall()[0][0]
+        return self._owner
 
     # ── Main method ────────────────────────────────────────────────────
 
@@ -141,6 +172,7 @@ class SchemaExtractor:
             SchemaError: If any query against the data dictionary fails.
         """
         try:
+            logger.info("Extracting schema %s", self.owner)
             tables_info = self._get_tables()
             if not tables_info:
                 return DatabaseSchema(tables=[])
@@ -208,14 +240,17 @@ class SchemaExtractor:
     # ── Bulk data dictionary queries (one per view, grouped in Python) ─
 
     def _get_tables(self) -> list[tuple[str, int | None]]:
-        """Return table names and approximate row counts for the current user."""
-        self.cursor.execute("SELECT table_name, num_rows FROM user_tables ORDER BY table_name")
+        """Return table names and approximate row counts for the schema owner."""
+        self.cursor.execute(
+            "SELECT table_name, num_rows FROM all_tables WHERE owner = :owner ORDER BY table_name",
+            owner=self.owner,
+        )
         return [(row[0], row[1]) for row in self.cursor.fetchall()]
 
     def _get_all_columns(self) -> dict[str, list[ColumnMetadata]]:
         """Return columns for all tables, grouped by table name.
 
-        Uses user_tab_cols (not user_tab_columns) to also see hidden and
+        Uses all_tab_cols (not all_tab_columns) to also see hidden and
         virtual columns, plus identity flags — as DataHub does.
         """
         self.cursor.execute(
@@ -230,10 +265,13 @@ class SchemaExtractor:
                 data_scale,
                 data_default,
                 identity_column,
-                virtual_column
-            FROM user_tab_cols
+                virtual_column,
+                char_length
+            FROM all_tab_cols
+            WHERE owner = :owner
             ORDER BY table_name, column_id
-            """
+            """,
+            owner=self.owner,
         )
         result: dict[str, list[ColumnMetadata]] = {}
         for row in self.cursor.fetchall():
@@ -247,6 +285,7 @@ class SchemaExtractor:
                 default_value=row[7],
                 is_identity=(row[8] == "YES"),
                 is_virtual=(row[9] == "YES"),
+                char_length=row[10] or None,
             )
             result.setdefault(row[0], []).append(col)
         return result
@@ -256,11 +295,14 @@ class SchemaExtractor:
         self.cursor.execute(
             """
             SELECT c.table_name, cc.column_name
-            FROM user_constraints c
-            JOIN user_cons_columns cc
-              ON c.constraint_name = cc.constraint_name
-            WHERE c.constraint_type = :ctype
+            FROM all_constraints c
+            JOIN all_cons_columns cc
+              ON c.owner = cc.owner
+             AND c.constraint_name = cc.constraint_name
+            WHERE c.owner = :owner
+              AND c.constraint_type = :ctype
             """,
+            owner=self.owner,
             ctype=constraint_type,
         )
         result: dict[str, set[str]] = {}
@@ -278,16 +320,21 @@ class SchemaExtractor:
                 c2.table_name  AS ref_table,
                 cc2.column_name AS ref_column,
                 c.constraint_name AS fk_name
-            FROM user_constraints c
-            JOIN user_cons_columns cc
-              ON c.constraint_name = cc.constraint_name
-            JOIN user_constraints c2
-              ON c.r_constraint_name = c2.constraint_name
-            JOIN user_cons_columns cc2
-              ON c2.constraint_name = cc2.constraint_name
+            FROM all_constraints c
+            JOIN all_cons_columns cc
+              ON c.owner = cc.owner
+             AND c.constraint_name = cc.constraint_name
+            JOIN all_constraints c2
+              ON c.r_owner = c2.owner
+             AND c.r_constraint_name = c2.constraint_name
+            JOIN all_cons_columns cc2
+              ON c2.owner = cc2.owner
+             AND c2.constraint_name = cc2.constraint_name
              AND cc2.position = cc.position
-            WHERE c.constraint_type = 'R'
-            """
+            WHERE c.owner = :owner
+              AND c.constraint_type = 'R'
+            """,
+            owner=self.owner,
         )
         result: dict[str, dict[str, dict[str, str]]] = {}
         for table_name, col_name, ref_table, ref_column, fk_name in self.cursor.fetchall():
@@ -308,9 +355,11 @@ class SchemaExtractor:
         self.cursor.execute(
             """
             SELECT table_name, column_name, index_name, column_position
-            FROM user_ind_columns
+            FROM all_ind_columns
+            WHERE table_owner = :owner
             ORDER BY table_name, index_name, column_position
-            """
+            """,
+            owner=self.owner,
         )
         by_index: dict[tuple[str, str], list[tuple[str, int]]] = {}
         for table_name, column_name, index_name, position in self.cursor.fetchall():
@@ -337,12 +386,15 @@ class SchemaExtractor:
         self.cursor.execute(
             """
             SELECT c.table_name, c.constraint_name, cc.column_name, cc.position
-            FROM user_constraints c
-            JOIN user_cons_columns cc
-              ON c.constraint_name = cc.constraint_name
-            WHERE c.constraint_type = 'R'
+            FROM all_constraints c
+            JOIN all_cons_columns cc
+              ON c.owner = cc.owner
+             AND c.constraint_name = cc.constraint_name
+            WHERE c.owner = :owner
+              AND c.constraint_type = 'R'
             ORDER BY c.table_name, c.constraint_name, cc.position
-            """
+            """,
+            owner=self.owner,
         )
         result: dict[str, dict[str, list[str]]] = {}
         for table_name, constraint_name, column_name, _position in self.cursor.fetchall():
@@ -354,9 +406,11 @@ class SchemaExtractor:
         self.cursor.execute(
             """
             SELECT table_name, index_name, column_name, column_position
-            FROM user_ind_columns
+            FROM all_ind_columns
+            WHERE table_owner = :owner
             ORDER BY table_name, index_name, column_position
-            """
+            """,
+            owner=self.owner,
         )
         result: dict[str, dict[str, list[str]]] = {}
         for table_name, index_name, column_name, _position in self.cursor.fetchall():
@@ -368,8 +422,10 @@ class SchemaExtractor:
         self.cursor.execute(
             """
             SELECT table_name, stale_stats, num_rows, last_analyzed
-            FROM user_tab_statistics
-            """
+            FROM all_tab_statistics
+            WHERE owner = :owner
+            """,
+            owner=self.owner,
         )
         result: dict[str, dict[str, Any]] = {}
         for table_name, stale_stats, num_rows, last_analyzed in self.cursor.fetchall():
@@ -386,8 +442,10 @@ class SchemaExtractor:
         self.cursor.execute(
             """
             SELECT table_name, constraint_name, constraint_type, status, validated
-            FROM user_constraints
-            """
+            FROM all_constraints
+            WHERE owner = :owner
+            """,
+            owner=self.owner,
         )
         result: dict[str, list[dict[str, Any]]] = {}
         for table_name, cname, ctype, status, validated in self.cursor.fetchall():
@@ -408,9 +466,11 @@ class SchemaExtractor:
         self.cursor.execute(
             """
             SELECT table_name, comments
-            FROM user_tab_comments
-            WHERE comments IS NOT NULL
-            """
+            FROM all_tab_comments
+            WHERE owner = :owner
+              AND comments IS NOT NULL
+            """,
+            owner=self.owner,
         )
         return {row[0]: row[1] for row in self.cursor.fetchall()}
 
@@ -419,9 +479,11 @@ class SchemaExtractor:
         self.cursor.execute(
             """
             SELECT table_name, column_name, comments
-            FROM user_col_comments
-            WHERE comments IS NOT NULL
-            """
+            FROM all_col_comments
+            WHERE owner = :owner
+              AND comments IS NOT NULL
+            """,
+            owner=self.owner,
         )
         return {(row[0], row[1]): row[2] for row in self.cursor.fetchall()}
 
@@ -430,3 +492,11 @@ class SchemaExtractor:
     def close(self) -> None:
         """Close the internal cursor."""
         self.cursor.close()
+
+
+def _normalise_owner(owner: str) -> str:
+    """Oracle's rule for identifiers: upper-case unless double-quoted."""
+    owner = owner.strip()
+    if len(owner) >= 2 and owner.startswith('"') and owner.endswith('"'):
+        return owner[1:-1]
+    return owner.upper()

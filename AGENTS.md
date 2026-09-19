@@ -216,7 +216,8 @@ el 0.5031 de α=0 no es lo que parece.
   media de 3 fraseos ARI 0.1256 / AMI 0.2004 / ARI~tbl 0.002, con el fraseo por defecto 0.1693 /
   0.2464. El documento, igual de ciego, da 0.0505 / 0.2105 / 0.867. Bootstrap pareado (500
   submuestras del 80 %, pipeline ciego completo en cada una): **ARI +0.073 [IC 95 % +0.042,
-  +0.106], gana el 100 %; AMI empata, [-0.053, +0.061].** En el corpus completo el documento es
+  +0.106], gana el 100 %; AMI empata, [-0.053, +0.061].** Tras el indicador de referencias sin FK
+  (bloque de 14 columnas): ARI +0.072 [+0.040, +0.104], AMI -0.001 [-0.059, +0.055]. En el corpus completo el documento es
   mejor en AMI por ~0.07 (el intervalo excluye el cero) y empata en ARI. Reporta la media sobre
   fraseos: el fraseo por defecto se eligió mirando el ARI.
 
@@ -250,6 +251,17 @@ el 0.5031 de α=0 no es lo que parece.
   señales de hermanos son cero por construcción. Se probaron 4 variantes de la regla, declaradas en
   el doc.
 
+- **Cualquier esquema Oracle.** `SchemaExtractor(conn, owner=...)` lee las vistas `ALL_*`
+  filtradas por dueño (antes `USER_*`, solo el esquema propio). Sin `owner` usa el usuario de la
+  sesión y reproduce la extracción anterior exactamente. `build_embeddings.py --owner ESQUEMA`.
+- **Banderas como las guarda Oracle.** `NUMBER(1)`, `CHAR(1)`, `VARCHAR2(1)` y el `BOOLEAN` de 23ai
+  declaran la familia booleana. La longitud se lee en caracteres (`char_length`), no en bytes.
+- **Una referencia sin FK no es un conflicto de tipo.** Si el nombre se lee como referencia, la
+  columna no es PK ni tiene FK y es número o texto, su diferencia se anula y el indicador
+  `unbacked_reference` (dimensión 14 del bloque, peso 0.7) vale 1. Una PK nunca cuenta como
+  conflicto ni como hallazgo. Marca 3 de las 4 `impossible_data`, pero depende del fraseo (11, 29
+  o 21 columnas): es una lista para revisar.
+
 - **Una diferencia se afirma solo con su intervalo pareado** (`--bootstrap N`). Ambos modos
   submuestrean sin reemplazo: con reemplazo, las columnas duplicadas inflan ARI y AMI.
 
@@ -265,7 +277,7 @@ el 0.5031 de α=0 no es lo que parece.
 ## Tests y lint
 
 ```bash
-.venv/bin/python -m pytest tests/ -v      # 546 tests, sin BD y sin descargar el modelo
+.venv/bin/python -m pytest tests/ -v      # 568 tests, sin BD y sin descargar el modelo
 .venv/bin/python -m ruff check src tests scripts   # lint-clean
 ```
 

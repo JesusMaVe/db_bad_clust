@@ -47,10 +47,11 @@ from db_bad_clust.features.structural_encoder import StructuralEncoder
 from db_bad_clust.features.text_preprocessor import TextPreprocessor
 
 
-def extract_schema(config: str):
+def extract_schema(config: str, owner: str | None = None):
+    """Read the schema `owner` (default: the connected user's own) from Oracle."""
     connector = OracleConnector(config_path=config)
     try:
-        return SchemaExtractor(connector.connect()).extract_all()
+        return SchemaExtractor(connector.connect(), owner=owner).extract_all()
     finally:
         connector.close()
 
@@ -237,6 +238,12 @@ def main() -> None:
         help="expectation in the conflict block: hard (default) or soft (candidato #6)",
     )
     parser.add_argument(
+        "--owner",
+        default=None,
+        help="schema to analyse (default: the connected user's). The connected user "
+        "only needs a privilege on its tables — metadata is read, never rows",
+    )
+    parser.add_argument(
         "--from-pickle",
         metavar="PICKLE",
         default=None,
@@ -244,7 +251,11 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    schema = schema_from_pickle(args.from_pickle) if args.from_pickle else extract_schema(args.config)
+    schema = (
+        schema_from_pickle(args.from_pickle)
+        if args.from_pickle
+        else extract_schema(args.config, owner=args.owner)
+    )
     print(f"Schema: {len(schema.tables)} tables, {schema.total_columns()} columns")
 
     if args.dry_run:

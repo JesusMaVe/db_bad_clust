@@ -921,6 +921,65 @@ y AMI +0.012 [-0.099, +0.088].
   por defecto. Para afirmar una mejora sin gigantes haría falta una señal de tabla que detecte `eav`
   y la inconsistencia de nombres de `ORDENES_COMPRA`. Ninguna de las probadas lo hace.
 
+
+### Aplicación a cualquier base Oracle (2026-09-19)
+
+El pipeline se escribió contra una sola base sintética. Tres supuestos suyos fallarían en una base
+Oracle real, y se corrigieron.
+
+1. **Cualquier esquema, no solo el del usuario conectado.** `SchemaExtractor` leía las vistas
+   `USER_*`, que solo muestran el esquema propio. Ahora lee las `ALL_*` filtradas por `owner`, con
+   los joins de restricciones hechos también por dueño. Una FK puede apuntar a una tabla de otro
+   esquema (`c.r_owner = c2.owner`). Sin `owner`, se usa el usuario de la sesión, lo que reproduce
+   el comportamiento anterior. Verificado contra el Oracle vivo: sin `owner`, con `owner` explícito
+   y con `owner` en minúsculas, la extracción es idéntica a la anterior en las 243 columnas, los
+   comentarios y los índices. `build_embeddings.py --owner ESQUEMA` lo expone. El usuario
+   conectado solo necesita algún privilegio sobre las tablas, porque solo se leen metadatos.
+2. **Banderas como las guarda Oracle.** Antes de 23ai, Oracle no tenía tipo booleano, y las
+   banderas se guardan como `NUMBER(1)`, `CHAR(1)` o `VARCHAR2(1)`. Solo se reconocía `CHAR(1)`, así
+   que un `ACTIVO NUMBER(1)` salía como conflicto de tipo. Ahora `declared_family` reconoce las
+   tres formas y el tipo nativo `BOOLEAN` de 23ai. La longitud se lee en caracteres
+   (`char_length`), no en bytes: con semántica de caracteres en AL32UTF8, un `CHAR(1)` ocupa 4
+   bytes. En este corpus no hay columnas `NUMBER(1)` ni `VARCHAR2(1)`, así que ninguna cifra cambia
+   por esto.
+3. **Referencias sin clave foránea, como hallazgo propio.** Muchas bases no declaran FK. Una
+   columna `CLIENTE_ID NUMBER` sin FK salía como conflicto de tipo, porque el nombre sugiere una
+   referencia y el catálogo solo declara un número. El bloque de conflicto gana una dimensión,
+   `unbacked_reference`, con peso 0.7, el mismo que los otros indicadores de declaración, fijado
+   antes de medir. Cuando el nombre se lee como referencia:
+   - si es clave primaria, es la clave propia del registro: ni conflicto ni hallazgo;
+   - si no tiene FK y el tipo es número o texto: no hay conflicto de tipo, y el indicador vale 1;
+   - si no, sigue siendo conflicto de tipo, como una referencia guardada como fecha.
+
+**Qué marca el indicador en este corpus** (redacción `orig`, 11 columnas):
+
+- 3 de las 4 `impossible_data`: `REGISTRO_ID`, `PRODUCTO_ID` y `PRODUCTO_FK`.
+- Referencias reales sin FK: `ORDER_ID`, `BACKUP_ORDER_ID`, `PROVEEDORES_ID` y `CLIENTE`.
+- Lecturas equivocadas del lector: `FLAG_S_N`, `FLAG_1_0`, `TIPO_REGISTRO` y `CLAVE`.
+
+Cuántas columnas marca depende mucho de la redacción: 11, 29 o 21. Es una lista para revisar, no
+un veredicto.
+
+**Efecto sobre las cifras** (Ward ciego, media de 3 redacciones), antes y después del cambio 3:
+
+| corpus       | configuración    | ARI antes | ARI después | AMI antes | AMI después |
+| ------------ | ---------------- | --------: | ----------: | --------: | ----------: |
+| sin gigantes | conflicto / Ward |    0.1256 |      0.1234 |    0.2004 |      0.1967 |
+| sin gigantes | dos niveles      |    0.1416 |      0.1409 |    0.2447 |      0.2425 |
+| completo     | conflicto / Ward |    0.3561 |      0.3600 |    0.3729 |      0.3822 |
+| completo     | dos niveles      |    0.6479 |      0.6469 |    0.5020 |      0.5023 |
+
+Las diferencias son de 0.004 o menos en la configuración principal. El bootstrap pareado (500
+submuestras) mantiene las conclusiones: sin gigantes, conflicto menos documento da ARI +0.072
+[+0.040, +0.104] y AMI -0.001 [-0.059, +0.055]; en el corpus completo, el documento sigue siendo
+mejor en AMI, -0.080 [-0.146, -0.027]. El control con HDBSCAN sin
+gigantes baja más, de 0.1288 a 0.1032. El informe de salud queda en F1-macro 0.515 ± 0.074. Con
+peso `zeta` 0, las cifras históricas se reproducen exactamente.
+
+El valor de estos cambios no está en las cifras de este corpus, donde casi no hay banderas
+numéricas ni referencias sin FK. Está en que el método ya no produce falsos positivos
+sistemáticos en una base Oracle real. Sigue sin haberse probado contra una.
+
 ---
 
 ## Referencias

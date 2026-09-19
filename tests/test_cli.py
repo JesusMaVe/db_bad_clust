@@ -24,7 +24,12 @@ def fixture_paths(tmp_path):
 
     def conflict_block(noise: float) -> np.ndarray:
         return np.hstack(
-            [groups + rng.normal(0, noise, (n, 6)), groups, rng.normal(0, noise, (n, 1))]
+            [
+                groups + rng.normal(0, noise, (n, 6)),
+                groups,
+                rng.normal(0, noise, (n, 1)),
+                np.zeros((n, 1)),
+            ]
         )
 
     e_conflict = conflict_block(0.05)

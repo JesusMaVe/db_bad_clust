@@ -21,10 +21,10 @@ y no de la columna. Diferencias medidas con un bootstrap pareado de 500 submuest
 | representación             |   ARI |   AMI | ARI contra la tabla |
 | -------------------------- | ----: | ----: | ------------------: |
 | descripción de la columna  | 0.051 | 0.211 |               0.867 |
-| conflicto nombre–tipo      | 0.126 | 0.200 |               0.002 |
+| conflicto nombre–tipo      | 0.123 | 0.197 |               0.003 |
 
-- La representación de conflicto mejora el ARI en +0.073, con un intervalo de confianza del 95 %
-  de +0.042 a +0.106. En AMI empatan.
+- La representación de conflicto mejora el ARI en +0.072, con un intervalo de confianza del 95 %
+  de +0.040 a +0.104. En AMI empatan.
 - La descripción de la columna agrupa sobre todo por tabla. El conflicto agrupa anti-patrones que
   cruzan tablas.
 - En el corpus completo, la descripción es mejor en AMI porque reconoce las dos tablas gigantes.
@@ -34,7 +34,9 @@ El detalle, los resultados negativos y la metodología están en
 
 ## Uso
 
-Requiere Python 3.10+ y Docker para la base Oracle.
+Requiere Python 3.10+ y Docker para la base Oracle de prueba. Contra otra base Oracle solo se leen
+metadatos del catálogo (vistas `ALL_*`), nunca filas; el usuario conectado necesita algún privilegio
+sobre las tablas del esquema.
 
 ```bash
 .venv/bin/python -m pip install -e ".[dev]"
@@ -47,7 +49,10 @@ Requiere Python 3.10+ y Docker para la base Oracle.
 .venv/bin/python -m db_bad_clust.cli experiment --without-giants \
     --pickle output/intermediate_docs.pkl --bootstrap 500
 
-# Reconstruir las representaciones desde Oracle
+# Analizar otra base: configurar la conexión en config.yaml y elegir el esquema
+.venv/bin/python scripts/build_embeddings.py --owner ESQUEMA --output output/otra_base.pkl
+
+# Reconstruir las representaciones del corpus de prueba
 .venv/bin/python scripts/generate_schema_sql.py   # solo con un volumen nuevo
 docker compose up -d
 .venv/bin/python scripts/verify_schema.py
@@ -75,7 +80,8 @@ de esta rama. [`AGENTS.md`](AGENTS.md) documenta los invariantes y decisiones de
 
 ## Limitaciones
 
-- Un solo corpus sintético: 23 tablas y 243 columnas, en español.
+- Evaluado sobre un solo corpus sintético de 23 tablas y 243 columnas, en español. No se ha
+  probado contra una base Oracle real, y los grupos que produce no traen nombre: hay que revisarlos.
 - Clases desbalanceadas: `giant_table` es el 37 % de las columnas y `self_referencing` tiene una.
 - Los anti-patrones propios de la tabla (`eav`, nombres inconsistentes en toda una tabla) no se
   detectan de forma demostrable. El diseño en dos niveles (`--two-level`) es experimental.
