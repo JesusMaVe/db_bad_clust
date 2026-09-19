@@ -18,6 +18,16 @@ def fixture_paths(tmp_path):
     rng = np.random.default_rng(0)
     column_index = [f"T{i // half}.C{i}" for i in range(n)]
     pickle_path = tmp_path / "intermediate.pkl"
+    groups = np.vstack(
+        [np.tile([1, 0, 0, 0, 0, 0], (half, 1)), np.tile([0, 0, 0, 1, 0, 0], (half, 1))]
+    )
+
+    def conflict_block(noise: float) -> np.ndarray:
+        return np.hstack(
+            [groups + rng.normal(0, noise, (n, 6)), groups, rng.normal(0, noise, (n, 1))]
+        )
+
+    e_conflict = conflict_block(0.05)
     with open(pickle_path, "wb") as fh:
         pickle.dump(
             {
@@ -29,6 +39,12 @@ def fixture_paths(tmp_path):
                 ).astype(float),
                 "e_rest": rng.normal(0, 1, (n, 3)),
                 "e_stat": rng.normal(0, 1, (n, 1)),
+                "e_conflict": e_conflict,
+                "e_conflict_variants": {
+                    "orig": e_conflict,
+                    "W2": conflict_block(0.08),
+                    "W3": conflict_block(0.10),
+                },
                 "phi": rng.normal(0, 1, (n, 12)),
                 "column_index": column_index,
             },
@@ -139,3 +155,73 @@ class TestErrorHandling:
         code = main(["experiment", "--pickle", "does/not/exist.pkl"])
         assert code == 1
         assert "does/not/exist.pkl" in capsys.readouterr().err
+
+
+class TestConflictFlags:
+    def test_conflict_prints_every_config_under_both_algorithms(self, fixture_paths, capsys):
+        pickle_path, labels_path = fixture_paths
+        assert (
+            main(["experiment", "--pickle", pickle_path, "--labels", labels_path, "--conflict"])
+            == 0
+        )
+        out = capsys.readouterr().out
+        for config in ("document (alpha=1)", "conflict fused"):
+            assert config in out
+        assert "ward" in out and "hdbscan" in out
+        assert "k=" in out  # Ward's blind choice is printed
+        assert "ARI~tbl" in out
+        assert "Cluster composition, conflict fused / ward" in out
+        assert "tables=" in out
+
+    def test_robustness_prints_one_row_per_wording_and_the_mean(self, fixture_paths, capsys):
+        pickle_path, labels_path = fixture_paths
+        assert (
+            main(["experiment", "--pickle", pickle_path, "--labels", labels_path, "--robustness"])
+            == 0
+        )
+        out = capsys.readouterr().out
+        for wording in ("orig", "W2", "W3"):
+            assert wording in out
+        assert "mean" in out and "smallest k" in out
+        assert "conflict fused / ward" in out and "conflict fused / hdbscan" in out
+
+    def test_robustness_without_variants_is_refused_with_a_hint(
+        self, fixture_paths, tmp_path, capsys
+    ):
+        pickle_path, labels_path = fixture_paths
+        with open(pickle_path, "rb") as fh:
+            data = pickle.load(fh)
+        del data["e_conflict_variants"]
+        bare = tmp_path / "novariants.pkl"
+        with open(bare, "wb") as fh:
+            pickle.dump(data, fh)
+        assert (
+            main(["experiment", "--pickle", str(bare), "--labels", labels_path, "--robustness"])
+            == 1
+        )
+        assert "from-pickle" in capsys.readouterr().err
+
+    def test_stability_prints_the_grid_and_a_blind_pick(self, fixture_paths, capsys):
+        pickle_path, labels_path = fixture_paths
+        assert (
+            main(["experiment", "--pickle", pickle_path, "--labels", labels_path, "--stability"])
+            == 0
+        )
+        out = capsys.readouterr().out
+        assert "validity" in out
+        assert "mcs" in out
+
+    def test_a_pickle_without_the_block_is_refused_with_a_hint(
+        self, fixture_paths, tmp_path, capsys
+    ):
+        pickle_path, labels_path = fixture_paths
+        with open(pickle_path, "rb") as fh:
+            data = pickle.load(fh)
+        del data["e_conflict"]
+        bare = tmp_path / "bare.pkl"
+        with open(bare, "wb") as fh:
+            pickle.dump(data, fh)
+        assert (
+            main(["experiment", "--pickle", str(bare), "--labels", labels_path, "--conflict"]) == 1
+        )
+        assert "from-pickle" in capsys.readouterr().err

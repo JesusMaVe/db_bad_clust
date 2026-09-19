@@ -37,6 +37,28 @@ de tabla en vez de la separación de anti-patrones. α = 1.00:
 Sobre el corpus completo (243 columnas), el documento sube AMI de 0.3619 a **0.4818**, accuracy
 de 0.7119 a **0.7984** y F1-macro de 0.2670 a **0.4622**.
 
+**Actualización (candidato #6): los clusters del documento son las tablas.** Sin gigantes, su
+partición tiene ARI 0.593 contra la tabla de cada columna. La representación de conflicto mide
+con BERT qué espera el *nombre* y le resta lo que declara el *tipo*. El clustering es Ward, con k
+elegido por silueta sin mirar etiquetas. En las mismas 153 columnas:
+
+| representación                    | ARI    | AMI    | ARI contra la tabla |
+| --------------------------------- | -----: | -----: | ------------------: |
+| documento                         | 0.0505 | 0.2105 |               0.867 |
+| **conflicto, media de 3 fraseos** | 0.1256 | 0.2004 |               0.002 |
+| conflicto, fraseo por defecto     | 0.1693 | 0.2464 |               0.006 |
+
+El ARI se duplica. El AMI no mejora de forma limpia, porque el del documento viene de reconocer
+tablas. La cifra a citar es la media sobre fraseos: el fraseo por defecto se eligió mirando el ARI.
+
+```bash
+.venv/bin/python -m db_bad_clust.cli experiment --without-giants \
+    --pickle output/intermediate_docs.pkl --conflict --robustness
+```
+
+Detalle, robustez y resultados negativos en `docs/research_improving_clustering.md`, candidatos #6
+y #7.
+
 *Accuracy y F1 de un clustering usan nombrado por voto mayoritario, que consulta la verdad de
 terreno: son cota superior, no marca alcanzada.*
 
@@ -92,7 +114,7 @@ sobre las 243 etiquetas, no reglas — ver AGENTS.md):
 ```
 
 ```bash
-.venv/bin/python -m pytest tests/ -v       # 436 tests, sin BD ni descarga del modelo
+.venv/bin/python -m pytest tests/ -v       # 507 tests, sin BD ni descarga del modelo
 ```
 
 `AGENTS.md` tiene el detalle completo: invariantes, ablaciones y limitaciones medidas.

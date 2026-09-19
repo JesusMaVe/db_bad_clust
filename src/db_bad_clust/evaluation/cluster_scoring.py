@@ -47,6 +47,11 @@ class ClusterScore:
     n_groups: int
     ami: float = 0.0
     v_measure: float = 0.0
+    # ARI of the partition against the TABLE each column belongs to — the
+    # leakage ruler. A clustering that scores 0.59 here has found the tables,
+    # whatever its ARI against the labels says; NaN when no table index was
+    # given.
+    table_ari: float = float("nan")
 
     def as_row(self) -> dict[str, Any]:
         return {
@@ -58,6 +63,7 @@ class ClusterScore:
             "accuracy": round(self.accuracy, 4),
             "f1_macro": round(self.f1_macro, 4),
             "n_groups": self.n_groups,
+            "table_ari": round(self.table_ari, 4) if self.table_ari == self.table_ari else None,
         }
 
 
@@ -98,6 +104,7 @@ def score(
     pred_labels: list[str],
     true_labels: list[str],
     group_ids: np.ndarray | list[int] | None = None,
+    table_of: list[str] | None = None,
 ) -> ClusterScore:
     """Score one configuration with both rulers.
 
@@ -105,6 +112,11 @@ def score(
     `group_ids` to score the raw cluster ids, since majority-vote naming can
     merge two clusters into one label and would otherwise misreport the
     partition.
+
+    `table_of` (the table each column belongs to, in the same order) adds
+    `table_ari`: how much of the partition is table identity. On this corpus
+    the document embedding scores 0.593 there against 0.111 on the labels —
+    without this number that result reads as detection when it is recognition.
 
     AMI is reported alongside NMI because the configurations compared here
     produce anywhere from 2 to 19 clusters, and NMI rises with the cluster
@@ -123,6 +135,11 @@ def score(
     validator = GroundTruthValidator()
     grouping = np.asarray(group_ids if group_ids is not None else pred_labels)
     truth_arr = np.asarray(true_labels)
+    table_ari = (
+        float(validator.adjusted_rand_index(grouping, np.asarray(table_of)))
+        if table_of is not None
+        else float("nan")
+    )
 
     return ClusterScore(
         name=name,
@@ -133,6 +150,7 @@ def score(
         n_groups=len(set(grouping.tolist())),
         ami=float(adjusted_mutual_info_score(truth_arr, grouping)),
         v_measure=float(v_measure_score(truth_arr, grouping)),
+        table_ari=table_ari,
     )
 
 

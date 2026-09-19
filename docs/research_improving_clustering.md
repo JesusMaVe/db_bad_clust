@@ -357,6 +357,282 @@ Con esto se cierran los 5 candidatos de este documento: 1 adoptado como nuevo de
 (`min_samples=3`), 1 disponible opt-in con reserva documentada (`epsilon`/tabla-agregada), 3
 resultados negativos honestos (modelo de embeddings, UMAP, fusión tardía).
 
+
+### Candidato #6 (2026-09-19): representación de conflicto — el problema era qué representa el vector
+
+Los cinco candidatos anteriores cambiaron el encoder, el reductor, los hiperparámetros o la
+fusión. Ninguno cambió **qué representa el vector**. Este candidato parte de un diagnóstico, no
+de una lista de técnicas.
+
+#### Diagnóstico: los clusters del documento son las tablas
+
+Sin las gigantes (153 columnas), documento α=1.00, `mcs=5 ms=3`:
+
+| se compara la partición contra… |   ARI |   AMI |
+| -------------------------------- | ----: | ----: |
+| la **tabla** de cada columna     | 0.593 | 0.754 |
+| la **etiqueta** de anti-patrón   | 0.111 | 0.250 |
+
+14 de 16 clusters son una sola tabla. Las etiquetas que "acierta" son las que coinciden con una
+tabla entera: `TBL_DATOS`→`inconsistent_naming`, `CONFIGURACION`→`eav`, `REPORTES`→
+`reserved_words`. En el embedding crudo, el 84 % de los 5 vecinos más cercanos de una columna son
+de su misma tabla. Para `wrong_data_types`, que está repartida en 15 tablas, solo el 20 % comparte
+su etiqueta.
+
+Quitar la identidad de tabla no deja nada debajo:
+
+| variante del documento (sin gigantes)          |    ARI |
+| ---------------------------------------------- | -----: |
+| documento completo                             |  0.111 |
+| sin comentario de tabla                        | -0.008 |
+| centrado por tabla (restar la media por tabla) |  0.041 |
+| oración solo de columna (sin tabla)            |  0.008 |
+| quitar las 1–5 primeras componentes principales | 0.070–0.079 |
+
+La causa es de representación. Una oración **promedia** sus facetas. 186 de 243 columnas comparten
+la faceta "texto de longitud variable de hasta 255 caracteres, admite nulos", así que la frase del
+tipo domina el vector. Pero un anti-patrón como `wrong_data_types` es un **conflicto entre
+facetas**: el nombre dice fecha y el tipo dice texto. El mean-pooling diluye justo eso. El techo
+supervisado lo confirma: un RandomForest con 5 folds sobre el embedding del documento llega a
+F1-macro 0.49. Con solo estructura llega a 0.13. El límite estaba en la representación, no en el
+algoritmo de clustering.
+
+#### El cambio: BERT como instrumento de medida, no como 384 coordenadas
+
+`ConflictBlock` (en `features/semantic_anchors.py`) le hace al encoder dos preguntas por separado
+y resta las respuestas:
+
+1. **Qué espera el nombre.** Se usa el coseno del nombre desnudo de la columna contra 6 anclas de
+   familia de almacenamiento: fecha, importe, referencia, texto, booleano y binario. Un softmax a
+   temperatura 0.05 lo convierte en distribución. Es zero-shot, sin etiquetas.
+2. **Qué declara el tipo.** Es la misma distribución de 6 familias, leída del tipo Oracle. Una FK
+   añade `referencia` y un `CHAR(1)` añade `booleano`.
+
+El bloque tiene 13 dimensiones: la diferencia (6), la familia declarada (6) y la entropía de la
+expectativa (1). Una columna cuyo nombre y tipo concuerdan cae cerca del origen, sea cual sea su
+tema. Cada tipo de conflicto se desplaza en su propia dirección. Esa es la geometría que un
+algoritmo de densidad puede aprovechar.
+
+`FeatureBuilder` lo pesa con `zeta`, que vale 0.0 por defecto. Con ese valor todo experimento
+anterior se reproduce cifra por cifra, verificado corriendo la ablación en el commit anterior y
+en este. Los pesos nuevos son `CONFLICT` (conflicto 1.0 y restricciones 0.5, sin embeddings) y
+`CONFLICT_FUSED` (añade 0.2 de documento y 0.3 de tabla agregada).
+
+#### Protocolo nuevo: el punto de operación se elige a ciegas
+
+Cada decisión de hiperparámetros anterior de este repo se tomó mirando el ARI contra las
+etiquetas, incluido `min_samples=3` del candidato #1. Eso es ajustar sobre el conjunto de prueba.
+`stability_sweep` recorre una rejilla de HDBSCAN con `min_cluster_size` ∈ {5, 6, 7, 8, 10} y
+`min_samples` ∈ {2, 3, 5}. Elige la celda con mayor `relative_validity_` de HDBSCAN, una
+aproximación de DBCV que nunca ve las etiquetas. La rejilla completa se publica. La columna
+**ARI~tbl** mide el ARI de la partición contra la tabla de cada columna: cuánto de un clustering
+es reconocimiento de tabla.
+
+#### Resultados, sin gigantes (153 columnas), ambas representaciones elegidas a ciegas
+
+| representación              | celda elegida |    ARI |    AMI | F1 (cota) |  k | ARI~tbl |
+| --------------------------- | ------------- | -----: | -----: | --------: | -: | ------: |
+| documento α=1.00            | mcs=5 ms=5    | 0.0478 | 0.1590 |    0.1629 | 14 |   0.381 |
+| **conflicto**               | mcs=6 ms=3    | 0.1276 | 0.2181 |    0.2323 | 11 |   0.010 |
+| conflicto fusionado         | mcs=5 ms=2    | 0.1200 | 0.2230 |    0.2324 | 11 |   0.025 |
+
+Sobre la rejilla completa de 15 celdas:
+
+| representación      | ARI mediana | ARI mín–máx   | AMI mediana | ARI~tbl mediana |
+| ------------------- | ----------: | ------------- | ----------: | --------------: |
+| documento α=1.00    |      0.0647 | 0.036 – 0.111 |      0.1825 |           0.267 |
+| conflicto           |      0.1186 | 0.044 – 0.198 |      0.2104 |           0.011 |
+| conflicto fusionado |      0.1110 | -0.099 – 0.171 |     0.2101 |           0.017 |
+
+La **mediana** de la rejilla del conflicto (0.1186) supera al **máximo** de la del documento
+(0.111). Ese máximo es exactamente la cifra que el repo reportaba como resultado. El conflicto
+gana en ARI y AMI y elimina la fuga de tabla, de 0.38 a 0.01.
+
+Rejilla completa del conflicto, sin gigantes (salida de `cli experiment --without-giants --stability`):
+
+| mcs | ms |    ARI |    AMI | F1-macro |  k | ruido | ARI~tbl | validity |
+| --: | -: | -----: | -----: | -------: | -: | ----: | ------: | -------: |
+|   5 |  2 | 0.1064 | 0.2066 |   0.2308 | 13 |   21% |  0.0258 |   0.2841 |
+|   5 |  3 | 0.0865 | 0.2030 |   0.2323 | 13 |   27% |  0.0190 |   0.3914 |
+|   5 |  5 | 0.0444 | 0.1833 |   0.1662 |  8 |   48% |  0.0094 |   0.3260 |
+|   6 |  2 | 0.1317 | 0.2145 |   0.2308 | 12 |   24% |  0.0204 |   0.3152 |
+|   6 |  3 | **0.1276** | **0.2181** | 0.2323 | 11 | 33% | 0.0098 | **0.4631** (elegida) |
+|   6 |  5 | 0.0444 | 0.1833 |   0.1662 |  8 |   48% |  0.0094 |   0.3260 |
+|   7 |  2 | 0.1317 | 0.2145 |   0.2308 | 12 |   24% |  0.0204 |   0.3152 |
+|   7 |  3 | 0.1276 | 0.2181 |   0.2323 | 11 |   33% |  0.0098 |   0.4631 |
+|   7 |  5 | 0.0444 | 0.1833 |   0.1662 |  8 |   48% |  0.0094 |   0.3260 |
+|   8 |  2 | 0.1659 | 0.2272 |   0.2308 | 11 |   29% |  0.0183 |   0.3861 |
+|   8 |  3 | 0.1984 | 0.2409 |   0.2130 |  8 |   22% |  0.0136 |   0.2171 |
+|   8 |  5 | 0.0562 | 0.2051 |   0.1662 |  7 |   45% |  0.0165 |   0.3344 |
+|  10 |  2 | 0.1302 | 0.2104 |   0.1666 |  5 |   39% |  0.0096 |   0.1643 |
+|  10 |  3 | 0.1186 | 0.2112 |   0.1670 |  5 |   39% |  0.0115 |   0.1776 |
+|  10 |  5 | 0.1051 | 0.2031 |   0.1662 |  5 |   40% |  0.0109 |   0.1828 |
+
+La mejor celda por etiquetas (`mcs=8 ms=3`, ARI 0.198) **no** es el resultado. Citarla sería
+repetir el error de protocolo que este candidato corrige.
+
+Composición de la partición del conflicto con `mcs=5 ms=3`: los clusters cruzan tablas.
+
+- **13 columnas** de 11 tablas, 11 de ellas `wrong_data_types`: FECHA, TIMESTAMP,
+  FECHA_NACIMIENTO, FECHA_ALTA… Son fechas guardadas como texto.
+- **15 columnas** de 10 tablas, 10 de ellas `wrong_data_types`: SALARIO, PRESUPUESTO, PRECIO,
+  STOCK_2… Son importes guardados como texto.
+- **8 columnas** de 5 tablas: ACTIVO, FLAG_ACTIVO, FLAG_S_N, FLAG_Y_N… Son los flags, que
+  mezclan `self_contradictory` e `inconsistent_naming`.
+- **9 columnas** de 6 tablas: REGISTRO_ID, DEPARTAMENTO, PRODUCTO_ID… Son referencias sin FK,
+  3 de las 4 `impossible_data`.
+- **17 IDs limpios** de 17 tablas, y varios clusters de nombres y descripciones limpios.
+
+#### Corpus completo (243 columnas): el documento sigue ganando, por la razón conocida
+
+| representación      | celda elegida |    ARI |    AMI | ARI~tbl |
+| ------------------- | ------------- | -----: | -----: | ------: |
+| documento α=1.00    | mcs=5 ms=3    | 0.3861 | 0.4802 |   0.884 |
+| conflicto           | mcs=6 ms=3    | 0.1470 | 0.2996 |   0.177 |
+| conflicto fusionado | mcs=10 ms=2   | 0.2921 | 0.4168 |   0.381 |
+
+`giant_table` es 90 de 243 columnas y es propiedad de la tabla. El documento la "detecta"
+reconociendo las dos tablas: tiene ARI~tbl 0.884. El conflicto no puede verla, porque una columna
+de una tabla gigante no tiene conflicto entre nombre y tipo. La versión fusionada recupera parte
+a través del bloque de tabla agregada. Esto confirma, no contradice, que `--without-giants` es
+la evaluación que vale.
+
+#### Advertencias
+
+- **Sensibilidad a las constantes.** En el prototipo, la temperatura 0.05 superó a 0.03 y a 0.10
+  en casi toda la rejilla. Un fraseo corto de las anclas ("fecha u hora", "si o no") colapsó a un
+  ARI cercano a 0. Promediar 3 paráfrasis por ancla **no** lo estabilizó. Las constantes de
+  `TYPE_FAMILY_ANCHORS` y `EXPECTATION_TEMPERATURE` son parte de la representación. Se eligieron
+  mirando el ARI del prototipo, igual que cualquier decisión previa del repo. La elección ciega
+  cubre HDBSCAN, no el fraseo.
+- **El bloque no se puede z-scorear por dimensión.** Las columnas indicadoras escasas de la
+  familia declarada tienen pocos unos. Con z-score por dimensión reciben valores de ±6 y dominan
+  toda distancia: medido, HDBSCAN colapsa a k≈5 con ARI 0. `scale_conflict_subblocks` escala por
+  sub-bloque con pesos 1.0 : 0.7 : 0.5.
+- **La F1 cota superior baja**, de 0.40 a 0.23. El documento la ganaba nombrando clusters que
+  eran tablas. ARI y AMI son las métricas honestas.
+- **Conflictos que se escapan** en el prototipo. `EMAIL DATE` cae en ruido. `MONTO` sale ambiguo,
+  con expectativa 0.49 fecha y 0.38 importe: el encoder no conoce bien "monto".
+  `INTENTOS_FALLIDOS` se lee como booleano. `NIVEL` y `PROVEEDORES_ID VARCHAR2` son conflictos que
+  el nombre solo no delata.
+- **El ground truth pone su propio techo.** `inconsistent_naming` junta tres fenómenos: nombres
+  en inglés (`ORDER_ID`), nombres genéricos (`C1`–`C7`) y convenciones de flag mezcladas
+  (`FLAG_S_N`, `FLAG_Y_N`, `FLAG_1_0`, `FLAG_T_F`). `clean` incluye `COL_A_BORRAR_1`,
+  `DUPLICADO_NOMBRE`, `BACKUP_COLUMN`, `REPETIDA_1` y `STOCK_COPIA`. Ninguna partición puede
+  reproducir etiquetas que agrupan cosas distintas. No se tocó ninguna etiqueta.
+- **Criterio no alcanzado.** El plan pedía ARI ≥ 0.15 en la celda elegida a ciegas y se quedó en
+  0.128. Se reporta tal cual.
+- **Informe de salud.** `build_raw_features` añade el bloque crudo. La F1-macro fuera de fold del
+  clasificador de referencia pasa de 0.5168 ± 0.090 a 0.5238 ± 0.069, dentro del ruido. No
+  empeora, pero tampoco mejora de forma medible.
+
+#### Decisión
+
+`zeta` queda en 0.0 por defecto, así que ningún experimento existente cambia. `--conflict` y
+`--stability` quedan como la forma de reportar este resultado. Recomendación: reportar el
+conflicto elegido a ciegas como resultado principal sin gigantes, y dejar de citar
+`documento, min_samples=3, ARI 0.1107` como resultado sin la nota de que se eligió mirando las
+etiquetas. Esa segunda recomendación es una decisión del autor del trabajo, no de este cambio.
+
+
+### Candidato #7 (2026-09-19): expectativa dura y Ward — quitar la fragilidad del candidato #6
+
+El candidato #6 dejó una cifra ciega de ARI 0.1276 sin gigantes, frágil ante la temperatura y el
+fraseo de las anclas. Este candidato midió cinco palancas antes de implementar nada. Implementa
+las dos que funcionan y documenta las que no. Las etiquetas no se tocaron, por decisión del autor.
+
+#### Causa raíz de la fragilidad
+
+La expectativa suave es un softmax de los cosenos del nombre contra las 6 familias. Cuando se
+aplana, por subir la temperatura o cambiar el fraseo, la familia declarada domina el bloque. El
+criterio interno, sea silueta o validez, elige entonces k=2: un corte por tipo declarado con ARI
+-0.08. Medido con Ward y k por silueta en 2..30, sin gigantes:
+
+| expectativa suave, fusionado | temp 0.03 | temp 0.05 | temp 0.10 |
+| ---------------------------- | --------: | --------: | --------: |
+| anclas `orig`                |    0.1735 |    0.1779 | -0.0776 (k=2) |
+| anclas `W2`                  |    0.0906 | -0.0776 (k=2) |  0.1084 |
+| anclas `W3`                  | -0.0723 (k=3) | -0.0776 (k=2) | 0.0080 |
+
+En el corpus completo, la versión suave colapsa a k=2 incluso con `orig` a 0.05 en cuanto k puede
+ir de 2 a 30.
+
+#### Lo que se implementó
+
+1. **Expectativa dura** (`ConflictBlock(mode="hard")`, ahora por defecto). Es un one-hot sobre la
+   familia de mayor coseno. La columna de confianza pasa a ser el margen entre el mejor coseno y el
+   segundo. No hay temperatura, y ninguno de los tres fraseos colapsa. `mode="soft"` sigue
+   disponible para reproducir el candidato #6.
+2. **Ward con k por silueta** (`evaluate_blind(..., algorithm="ward")`, k en 2..30). Asigna cada
+   columna, así que no hay un bloque de ruido que el scoring cuente como un cluster más. Sobre la
+   representación de conflicto, la silueta tiene su máximo global en k=17 en todo el rango 2..40.
+   El límite superior no es lo que elige.
+3. **HDBSCAN como control**, con la celda elegida por validez relativa y el ruido reasignado a sus
+   3 vecinos agrupados (`reassign_noise_knn`).
+4. **Robustez sobre fraseos** (`--robustness`). El bloque se construye con las tres redacciones de
+   `TYPE_FAMILY_ANCHOR_VARIANTS` y se reporta la media. Las anclas `orig` se eligieron en el
+   prototipo del candidato #6 mirando el ARI. Por eso la cifra principal es la media, no `orig`.
+
+#### Resultados, todo elegido a ciegas
+
+Sin gigantes (153 columnas), representación fusionada:
+
+| configuración                      | algoritmo    |    ARI |    AMI |  k | ARI~tbl |
+| ---------------------------------- | ------------ | -----: | -----: | -: | ------: |
+| documento α=1                      | Ward         | 0.0505 | 0.2105 | 24 |   0.867 |
+| documento α=1                      | HDBSCAN+kNN  | 0.0448 | 0.1502 | 13 |   0.655 |
+| candidato #6 (suave, `orig`)       | HDBSCAN      | 0.1276 | 0.2181 | 11 |   0.010 |
+| **duro, `orig`**                   | Ward         | 0.1693 | 0.2464 | 17 |   0.006 |
+| **duro, media de 3 fraseos**       | Ward         | 0.1256 | 0.2004 | ≥17 |  0.002 |
+| duro, media de 3 fraseos           | HDBSCAN+kNN  | 0.1288 | 0.1645 | ≥6 |   0.007 |
+| suave, media de 3 fraseos, temp 0.05 | Ward       | 0.0076 |      — | 2–17 |    — |
+
+Corpus completo (243 columnas):
+
+| configuración                | algoritmo   |    ARI |    AMI |  k | ARI~tbl |
+| ---------------------------- | ----------- | -----: | -----: | -: | ------: |
+| documento α=1                | Ward        | 0.3659 | 0.4522 | 23 |   0.963 |
+| documento α=1                | HDBSCAN     | 0.3861 | 0.4802 | 19 |   0.884 |
+| **duro, `orig`**             | Ward        | 0.4185 | 0.3673 | 15 |   0.300 |
+| **duro, media de 3 fraseos** | Ward        | 0.3561 | 0.3729 | ≥15 |  0.380 |
+
+Por fraseo (Ward), sin gigantes: `orig` 0.1693, `W2` 0.0961 y `W3` 0.1115. En el corpus completo:
+0.4185, 0.3435 y 0.3062.
+
+#### Lectura honesta
+
+- **Robustez: es la ganancia clara.** Con el mismo protocolo, la media sobre fraseos pasa de 0.0076
+  (suave) a 0.1256 (dura). Ningún fraseo cae por debajo de k=17 con Ward.
+- **ARI: sube.** Sin gigantes, la media dura (0.1256) duplica al documento elegido a ciegas
+  (0.0505). Con `orig` llega a 0.1693. En el corpus completo, `orig` supera al documento (0.4185
+  contra 0.3659–0.3861) con un tercio de su fuga de tabla. La media (0.356) queda al nivel del
+  documento.
+- **AMI: no sube de forma limpia.** Sin gigantes, la media dura (0.2004) queda algo por debajo del
+  documento con Ward (0.2105). En el corpus completo queda claramente por debajo (0.373 contra
+  0.452). El AMI del documento viene de reconocer tablas: su ARI~tbl es 0.87–0.96. Aun así, la
+  cifra es la que es.
+- **`conflicto` y `conflicto fusionado` dan la misma partición con Ward sin gigantes.** Con α=0.2 y
+  ε=0.3, el documento y la tabla agregada se quedan con el 3 % y el 6.5 % de la varianza, y no
+  mueven ninguna columna. En el corpus completo sí cambian algo: 0.4106 contra 0.4185.
+- **Informe de salud.** La F1-macro fuera de fold pasa de 0.5238 ± 0.069 (bloque suave) a
+  0.5048 ± 0.074 (bloque duro). Está dentro de la desviación, pero es algo menor. Sin bloque de
+  conflicto era 0.5168 ± 0.090. El bloque no aporta al clasificador supervisado.
+
+#### Lo que se midió y no funciona
+
+| palanca                                                        | resultado (sin gigantes, ciego)                              |
+| -------------------------------------------------------------- | ------------------------------------------------------------ |
+| bloque de "forma del nombre" (reservada, genérico, inglés, mezcla, flag) | HDBSCAN colapsa a k=2 (-0.08). Ward baja a 0.10–0.12 con los dos fraseos probados |
+| votar o promediar la expectativa entre fraseos y encoders      | las cuotas de voto actúan como expectativa suave y vuelve k=2. Dos votantes coinciden en el 42 % de las columnas |
+| otros encoders como lector del nombre (mpnet, e5-small, e5-base) | ninguno supera a MiniLM de forma estable. mpnet da 0.04–0.06 |
+| darle al lector el comentario de columna                       | la media baja de 0.126 a 0.102 (0.106 sin palabras de tipo)   |
+| darle al lector "columna X de la tabla Y"                      | la media baja a 0.081 y reaparece algo de fuga (ARI~tbl 0.04) |
+| revisar etiquetas (dividir `inconsistent_naming`, sacar redundantes de `clean`) | +0.015 ARI y +0.03 AMI. No se aplicó por decisión del autor |
+
+El cuello de botella que queda es el **lector**. La lectura zero-shot de un nombre de columna desnudo
+es ruidosa: los tres fraseos coinciden en la familia de una columna el 58–67 % de las veces. Cada
+palanca que intentó darle más contexto o más votos empeoró el resultado.
+
 ---
 
 ## Referencias

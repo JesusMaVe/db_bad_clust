@@ -34,6 +34,8 @@ entrypoint shebangs are stale.
 .venv/bin/python -m db_bad_clust.cli experiment --sweep
 .venv/bin/python -m db_bad_clust.cli experiment --without-giants \
     --ablation output/intermediate_02.pkl output/intermediate_docs.pkl
+.venv/bin/python -m db_bad_clust.cli experiment --without-giants \
+    --pickle output/intermediate_docs.pkl --conflict --robustness
 
 # Rebuild the feature blocks from live Oracle metadata. Needs the container up.
 .venv/bin/python scripts/apply_comments.py            # once: puts comments in the DB
@@ -42,7 +44,7 @@ entrypoint shebangs are stale.
 ```
 
 ```bash
-.venv/bin/python -m pytest tests/ -v      # 436 tests, no DB required
+.venv/bin/python -m pytest tests/ -v      # 507 tests, no DB required
 .venv/bin/python -m ruff check src tests scripts   # lint-clean
 ```
 
@@ -69,7 +71,7 @@ notebooks/         01, 02 — the original pipeline; keep them, they produce
 tests/             pytest, entirely mock-based — no DB, no model download
 ```
 
-## The three results this branch rests on
+## The four results this branch rests on
 
 **1. `alpha` never weighted anything.** `FeatureBuilder._zscore` normalizes per dimension, so a
 block's *total* variance equals its dimension count — 384 for the embeddings against 7 effective
@@ -99,6 +101,26 @@ On the 153 columns that remain once the two giant tables are excluded, at `alpha
 The document wins all five. The old name-only embedding scores **negative** ARI — worse than
 chance. The difference was never BERT; it was the input.
 
+**4. The document's clusters are the tables.** Without the giants its partition scores ARI
+**0.593 against each column's table** and 0.111 against the labels. Take the table out and it
+falls to ~0. A sentence averages its facets, and an anti-pattern is a *conflict* between them
+(name says date, type says text). `ConflictBlock` asks the encoder what the bare **name**
+expects (zero-shot over 6 storage families), subtracts what the type declares, and weights the
+result with `zeta`. The expectation is **hard** (one-hot on the closest family), and the
+clustering is Ward with k chosen by silhouette. Everything is chosen blind. On 153 columns:
+
+| representation                    | ARI    | AMI    | ARI vs table |
+| --------------------------------- | -----: | -----: | -----------: |
+| document                          | 0.0505 | 0.2105 |        0.867 |
+| **conflict, mean of 3 wordings**  | 0.1256 | 0.2004 |        0.002 |
+| conflict, default wording         | 0.1693 | 0.2464 |        0.006 |
+
+ARI doubles, and AMI does not improve cleanly: the document's AMI comes from recognising tables.
+The 0.1107 quoted above for the document was picked by looking at the labels (`min_samples=3`).
+On the full corpus, the default wording beats the document on ARI (0.4185 against 0.366–0.386)
+with a third of its table leakage, but not on AMI. See `docs/research_improving_clustering.md`,
+candidatos #6 and #7.
+
 ## Invariants
 
 - **`FeatureBuilder` defaults to `normalize="block"`.** Reintroducing per-dimension-only
@@ -119,6 +141,19 @@ chance. The difference was never BERT; it was the input.
   truth the pipeline never saw. Say so wherever they are quoted.
 - **Never overwrite `output/intermediate_02.pkl`.** It is the historical baseline; an
   experiment that overwrites its own baseline cannot be checked.
+
+- **`zeta` defaults to 0.0, and the conflict block is scaled per sub-block, never per
+  dimension.** Per-dimension z-scoring lets the sparse `reference`/`boolean` indicators dominate
+  and collapses HDBSCAN (k≈5, ARI 0). The block reads the bare column name, never the document.
+- **The expectation is hard by default; do not go back to soft, and do not vote.** A softmax
+  expectation flattens with temperature or wording, lets the declared type dominate, and the
+  blind criterion picks k=2 (ARI -0.08). Vote shares across wordings or encoders behave the
+  same way. The name reader is the bottleneck: three wordings agree on 58-67% of columns.
+- **Quote the mean over anchor wordings, not the default wording.** The default was chosen while
+  looking at the labelled score. `--robustness` prints all three and the mean.
+- **Choose every hyper-parameter blind and quote ARI~tbl.** `evaluate_blind` picks Ward's k by
+  silhouette (2..30) or HDBSCAN's cell by `relative_validity_`, with noise reassigned by kNN. A
+  high ARI against the table means the clustering found tables, not anti-patterns.
 
 - **The `--mismatch` scalar is a mixed result, not a clean win** — it lifts F1-macro
   (majority-vote naming can use it to name a cluster better) but slightly lowers ARI/AMI (it

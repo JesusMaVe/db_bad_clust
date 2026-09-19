@@ -12,9 +12,18 @@ It writes a NEW pickle and never touches `output/intermediate_02.pkl`: the old
 artifact is what reproduces the historical numbers, and an experiment that
 overwrites its own baseline cannot be checked.
 
+Every pickle also carries `e_conflict`, the raw name-expectation-minus-declared-
+type block (features/semantic_anchors.py, ConflictBlock), in hard mode with the
+default anchors, and `e_conflict_variants`, the same block under each wording
+in TYPE_FAMILY_ANCHOR_VARIANTS — the input to `cli experiment --robustness`.
+Both cost one encoder pass over the bare column names and are weighted by
+`zeta`, 0.0 by default, so storing them changes no existing experiment.
+
 Usage:
     .venv/bin/python scripts/build_embeddings.py --output output/intermediate_docs.pkl
     .venv/bin/python scripts/build_embeddings.py --dry-run          # print 5 documents, no model
+    .venv/bin/python scripts/build_embeddings.py --from-pickle output/intermediate_docs.pkl \
+        --output output/intermediate_docs.pkl                     # re-embed without Oracle
 """
 
 from __future__ import annotations
@@ -42,6 +51,21 @@ def extract_schema(config: str):
         connector.close()
 
 
+def schema_from_pickle(path: str):
+    """The `DatabaseSchema` an earlier run of this script stored under "schema".
+
+    Lets a new block be added (or the encoder swapped) without the container
+    up — the schema in the pickle is the one the extractor read, so the result
+    is the same as extracting again.
+    """
+    with open(path, "rb") as fh:
+        data = pickle.load(fh)
+    schema = data.get("schema")
+    if schema is None:
+        raise SystemExit(f"{path} carries no 'schema' key — rebuild it from Oracle first")
+    return schema
+
+
 def build(
     schema,
     model_name: str,
@@ -49,6 +73,7 @@ def build(
     semantic: str = "documents",
     mismatch: bool = False,
     text_prefix: str = "",
+    conflict_mode: str = "hard",
 ) -> dict[str, object]:
     """Documents → embeddings, plus the structural blocks, in one column order.
 
@@ -81,6 +106,9 @@ def build(
     model card documents a "query: " prefix, including for clustering per its
     FAQ. Not applying it isn't a neutral no-op for those models, it's silently
     reproducing the wrong documented usage.
+
+    `conflict_mode` is ConflictBlock's expectation: "hard" (default, one-hot on
+    the closest family) or "soft" (softmax, reproduces candidato #6).
     """
     preprocessor = TextPreprocessor.for_documents()
     documents, keys = preprocessor.build_documents(
@@ -94,7 +122,11 @@ def build(
     ]
 
     from db_bad_clust.features.bert_embedder import BERTEmbedder
-    from db_bad_clust.features.semantic_anchors import SemanticAnchors
+    from db_bad_clust.features.semantic_anchors import (
+        TYPE_FAMILY_ANCHOR_VARIANTS,
+        ConflictBlock,
+        SemanticAnchors,
+    )
 
     embedder = BERTEmbedder(model_name=model_name)
 
@@ -112,11 +144,27 @@ def build(
         anchor_mismatch = SemanticAnchors(embedder).type_mismatch(names, columns)
         e_stat = np.hstack([e_stat, anchor_mismatch])
 
+    # The conflict block reads the bare name — no table, no document — because
+    # the document states the type, which is the answer being asked for, and
+    # the table name would put topic back into a block whose point is to have
+    # none.
+    bare_names = [preprocessor.process(col.name) for col in columns]
+    e_conflict_variants = {
+        wording: ConflictBlock(embedder, anchors=anchors, mode=conflict_mode).build(
+            bare_names, columns
+        )
+        for wording, anchors in TYPE_FAMILY_ANCHOR_VARIANTS.items()
+    }
+    e_conflict = e_conflict_variants["orig"]
+
     return {
         "e_text": e_text,
         "e_type": blocks["data_types"],
         "e_rest": blocks["constraints"],
         "e_stat": e_stat,
+        "e_conflict": e_conflict,
+        "e_conflict_variants": e_conflict_variants,
+        "conflict_mode": conflict_mode,
         "column_index": keys,
         "documents": documents,
         "include_table_comment": include_table_comment,
@@ -168,9 +216,21 @@ def main() -> None:
         action="store_true",
         help="print a few documents and exit, without loading the model",
     )
+    parser.add_argument(
+        "--conflict-mode",
+        choices=("hard", "soft"),
+        default="hard",
+        help="expectation in the conflict block: hard (default) or soft (candidato #6)",
+    )
+    parser.add_argument(
+        "--from-pickle",
+        metavar="PICKLE",
+        default=None,
+        help="read the schema from an existing pickle instead of Oracle (no container needed)",
+    )
     args = parser.parse_args()
 
-    schema = extract_schema(args.config)
+    schema = schema_from_pickle(args.from_pickle) if args.from_pickle else extract_schema(args.config)
     print(f"Schema: {len(schema.tables)} tables, {schema.total_columns()} columns")
 
     if args.dry_run:
@@ -189,6 +249,7 @@ def main() -> None:
         semantic=args.semantic,
         mismatch=args.mismatch,
         text_prefix=args.query_prefix,
+        conflict_mode=args.conflict_mode,
     )
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -197,7 +258,10 @@ def main() -> None:
 
     e_text = data["e_text"]
     print(f"Embedded {len(data['documents'])} documents with {args.model}")
-    print(f"e_text {np.shape(e_text)}, e_stat {np.shape(data['e_stat'])} → {output}")
+    print(
+        f"e_text {np.shape(e_text)}, e_stat {np.shape(data['e_stat'])}, "
+        f"e_conflict {np.shape(data['e_conflict'])} → {output}"
+    )
 
 
 if __name__ == "__main__":

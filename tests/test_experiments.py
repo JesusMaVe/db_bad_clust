@@ -361,3 +361,315 @@ class TestFormatTable:
         text = format_table(rows)
         assert "AMI" in text
         assert "different k" in text
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# The conflict block, table leakage and the stability sweep
+# ═══════════════════════════════════════════════════════════════════════
+
+from db_bad_clust.evaluation.experiments import (  # noqa: E402
+    CONFLICT,
+    CONFLICT_FUSED,
+    STABILITY_GRID,
+    choose_operating_point,
+    cluster_composition,
+    format_stability,
+    stability_sweep,
+)
+from db_bad_clust.features.semantic_anchors import CONFLICT_DIM  # noqa: E402
+
+
+def _conflict_dataset(n: int = 40) -> Dataset:
+    """`_dataset` plus a conflict block that separates the same two groups."""
+    base = _dataset(n)
+    rng = np.random.default_rng(1)
+    half = n // 2
+    e_conflict = rng.normal(0, 0.05, (n, CONFLICT_DIM))
+    e_conflict[:half, 0] += 1.0  # "date expected" for the first group
+    e_conflict[half:, 3] += 1.0  # "text expected" for the second
+    e_conflict[:half, 6] = 1.0  # declared date
+    e_conflict[half:, 9] = 1.0  # declared text
+    return Dataset(
+        e_text=base.e_text,
+        e_type=base.e_type,
+        e_rest=base.e_rest,
+        e_stat=base.e_stat,
+        column_index=base.column_index,
+        truth=base.truth,
+        e_conflict=e_conflict,
+    )
+
+
+class TestConflictDataset:
+    def test_block_travels_through_without_tables(self):
+        ds = _conflict_dataset()
+        kept = ds.without_tables({"T0"})
+        assert kept.e_conflict.shape == (20, CONFLICT_DIM)
+        assert np.array_equal(kept.e_conflict, ds.e_conflict[20:])
+
+    def test_rejects_a_conflict_block_of_the_wrong_length(self):
+        base = _dataset()
+        with pytest.raises(ValueError):
+            Dataset(
+                e_text=base.e_text,
+                e_type=base.e_type,
+                e_rest=base.e_rest,
+                e_stat=base.e_stat,
+                column_index=base.column_index,
+                truth=base.truth,
+                e_conflict=np.zeros((3, CONFLICT_DIM)),
+            )
+
+    def test_zeta_absent_from_weights_leaves_phi_unchanged(self):
+        """Every existing weights dict lacks "zeta": the block is present but silent."""
+        ds = _conflict_dataset()
+        phi = build_phi(ds, weights_for(1.0))
+        assert phi.shape[1] == 8 + 2 + 3 + 1 + CONFLICT_DIM
+        assert np.allclose(phi[:, -CONFLICT_DIM:], 0.0)
+
+    def test_conflict_weights_switch_the_embeddings_off(self):
+        assert CONFLICT["alpha"] == 0.0 and CONFLICT["zeta"] == 1.0
+        assert CONFLICT_FUSED["zeta"] == 1.0 and 0 < CONFLICT_FUSED["alpha"] < 1
+
+    def test_conflict_representation_never_mixes_the_planted_groups(self):
+        """The fixture's constraint block is pure noise, so HDBSCAN may leave a
+        few points as noise; what must hold is that no cluster mixes groups."""
+        ds = _conflict_dataset()
+        run = evaluate("conflict", ds, CONFLICT, min_cluster_size=3, min_samples=2)
+        clusters = {c for c in run.cluster_ids if c != -1}
+        assert len(clusters) >= 2
+        for cid in clusters:
+            members = {t for c, t in zip(run.cluster_ids, ds.truth, strict=True) if c == cid}
+            assert len(members) == 1
+        assert run.score.ari > 0.8
+
+    def test_precision_sensitivity_casts_the_block_too(self):
+        ds = _conflict_dataset()
+        out = precision_sensitivity(ds, CONFLICT, min_cluster_size=3, min_samples=2)
+        assert out["gap"] == pytest.approx(0.0, abs=1e-6)
+
+
+class TestTableLeakage:
+    def test_a_partition_that_is_the_tables_scores_one_against_them(self):
+        """The fixture's two groups ARE its two tables — leakage is total here."""
+        run = evaluate("doc", _dataset(), weights_for(1.0), min_cluster_size=3, min_samples=2)
+        assert run.score.table_ari == pytest.approx(1.0)
+
+    def test_table_ari_is_rendered_in_the_table(self):
+        run = evaluate("doc", _dataset(), weights_for(1.0), min_cluster_size=3, min_samples=2)
+        out = format_table([run.score])
+        assert "ARI~tbl" in out
+        assert "1.0000" in out
+
+    def test_a_score_without_tables_renders_na(self):
+        from db_bad_clust.evaluation.cluster_scoring import score
+
+        s = score("x", ["a", "b"], ["a", "b"], group_ids=[0, 1])
+        assert s.table_ari != s.table_ari  # nan
+        assert "n/a" in format_table([s])
+        assert s.as_row()["table_ari"] is None
+
+
+class TestStabilitySweep:
+    def test_one_row_per_grid_cell_with_a_validity(self):
+        ds = _conflict_dataset()
+        grid = ((3, 2), (4, 2), (5, 3))
+        rows = stability_sweep(ds, CONFLICT, grid=grid)
+        assert [(r.min_cluster_size, r.min_samples) for r in rows] == list(grid)
+        assert all(0.0 <= r.noise_fraction <= 1.0 for r in rows)
+        assert all(r.score.table_ari == r.score.table_ari for r in rows)
+
+    def test_the_default_grid_is_the_documented_one(self):
+        assert (5, 3) in STABILITY_GRID and (8, 3) in STABILITY_GRID
+        assert len(STABILITY_GRID) == 15
+
+    def test_operating_point_is_the_highest_defined_validity(self):
+        ds = _conflict_dataset()
+        rows = stability_sweep(ds, CONFLICT, grid=((3, 2), (4, 2)))
+        chosen = choose_operating_point(rows)
+        defined = [r for r in rows if r.relative_validity == r.relative_validity]
+        if defined:
+            assert chosen is max(defined, key=lambda r: r.relative_validity)
+        else:
+            assert chosen is None
+
+    def test_operating_point_ignores_undefined_cells(self):
+        from db_bad_clust.evaluation.cluster_scoring import ClusterScore
+        from db_bad_clust.evaluation.experiments import StabilityRow
+
+        def row(v):
+            return StabilityRow(5, 3, ClusterScore("x", 0, 0, 0, 0, 1), v, 0.0)
+
+        assert choose_operating_point([row(float("nan"))]) is None
+        good = row(0.4)
+        assert choose_operating_point([row(float("nan")), row(0.1), good]) is good
+
+    def test_format_marks_the_chosen_cell_and_never_the_best_label(self):
+        ds = _conflict_dataset()
+        rows = stability_sweep(ds, CONFLICT, grid=((3, 2), (4, 2)))
+        out = format_stability(rows)
+        assert "validity" in out
+        assert ("*" in out) == (choose_operating_point(rows) is not None)
+        assert "tuning on the test set" in out
+
+
+class TestClusterComposition:
+    def test_one_line_per_cluster_with_tables_spanned(self):
+        ds = _dataset()
+        out = cluster_composition(ds, [0] * 20 + [1] * 20)
+        lines = out.splitlines()
+        assert len(lines) == 2
+        assert "tables= 1" in lines[0]
+        assert "eav 20" in lines[0]
+        assert "clean 20" in lines[1]
+
+    def test_noise_is_named_as_such(self):
+        ds = _dataset()
+        out = cluster_composition(ds, [-1] * 40)
+        assert "noise" in out and "tables= 2" in out
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Blind evaluation: Ward by silhouette, HDBSCAN + kNN, robustness
+# ═══════════════════════════════════════════════════════════════════════
+
+from db_bad_clust.evaluation.experiments import (  # noqa: E402
+    WARD_K_RANGE,
+    _cluster_ward,
+    evaluate_blind,
+    format_blind_table,
+    format_robustness,
+    reassign_noise_knn,
+    robustness_over_wordings,
+)
+
+
+def _three_blobs(per: int = 15) -> np.ndarray:
+    rng = np.random.default_rng(7)
+    centres = np.array([[0.0, 0.0], [10.0, 0.0], [0.0, 10.0]])
+    return np.vstack([rng.normal(c, 0.3, (per, 2)) for c in centres])
+
+
+def _with_variants(ds: Dataset) -> Dataset:
+    rng = np.random.default_rng(9)
+    variants = {
+        "orig": ds.e_conflict,
+        "W2": ds.e_conflict + rng.normal(0, 0.02, ds.e_conflict.shape),
+        "W3": ds.e_conflict + rng.normal(0, 0.04, ds.e_conflict.shape),
+    }
+    return Dataset(
+        e_text=ds.e_text,
+        e_type=ds.e_type,
+        e_rest=ds.e_rest,
+        e_stat=ds.e_stat,
+        column_index=ds.column_index,
+        truth=ds.truth,
+        e_conflict=ds.e_conflict,
+        e_conflict_variants=variants,
+    )
+
+
+class TestClusterWard:
+    def test_picks_the_planted_number_of_groups_by_silhouette(self):
+        labels, k, sil = _cluster_ward(_three_blobs())
+        assert k == 3
+        assert len(set(labels.tolist())) == 3
+        assert sil > 0.8
+
+    def test_never_asks_for_more_clusters_than_points_allow(self):
+        labels, k, _ = _cluster_ward(_three_blobs(per=2), k_range=(2, 30))
+        assert k <= 5
+        assert len(labels) == 6
+
+    def test_default_range_is_the_documented_one(self):
+        assert WARD_K_RANGE == (2, 30)
+
+
+class TestReassignNoise:
+    def test_leaves_no_noise_and_keeps_clustered_points(self):
+        X = _three_blobs()
+        labels = np.repeat([0, 1, 2], 15)
+        noisy = labels.copy()
+        noisy[[0, 16, 31]] = -1
+        out = reassign_noise_knn(X, noisy)
+        assert (out != -1).all()
+        assert np.array_equal(out[noisy != -1], labels[noisy != -1])
+        assert np.array_equal(out, labels)  # each noise point sits inside its blob
+
+    def test_all_noise_comes_back_unchanged(self):
+        X = _three_blobs()
+        out = reassign_noise_knn(X, np.full(len(X), -1))
+        assert (out == -1).all()
+
+
+class TestEvaluateBlind:
+    @pytest.mark.parametrize("algorithm", ["ward", "hdbscan"])
+    def test_reports_the_choice_and_its_criterion(self, algorithm):
+        ds = _conflict_dataset()
+        run = evaluate_blind("c", ds, CONFLICT, algorithm=algorithm, grid=((3, 2), (5, 3)))
+        assert run.algorithm == algorithm
+        assert run.chosen.startswith("k=" if algorithm == "ward" else "mcs=")
+        assert run.criterion == run.criterion  # defined
+        assert run.evaluation.score.ari > 0.8
+
+    def test_hdbscan_path_leaves_no_noise(self):
+        ds = _conflict_dataset()
+        run = evaluate_blind("c", ds, CONFLICT, algorithm="hdbscan", grid=((3, 2),))
+        assert -1 not in run.evaluation.cluster_ids
+
+    def test_rejects_an_unknown_algorithm(self):
+        with pytest.raises(ValueError):
+            evaluate_blind("c", _conflict_dataset(), CONFLICT, algorithm="kmeans")
+
+    def test_table_lists_every_run(self):
+        ds = _conflict_dataset()
+        runs = [
+            (a, evaluate_blind(a, ds, CONFLICT, algorithm=a, grid=((3, 2),)))
+            for a in ("ward", "hdbscan")
+        ]
+        out = format_blind_table(runs)
+        assert "ward" in out and "hdbscan" in out and "chosen" in out
+
+
+class TestRobustness:
+    def test_one_row_per_wording_and_a_summary(self):
+        ds = _with_variants(_conflict_dataset())
+        report = robustness_over_wordings(ds, CONFLICT, algorithm="ward")
+        assert [w for w, _ in report.rows] == ["orig", "W2", "W3"]
+        mean, low, high = report.summary("ari")
+        assert low <= mean <= high
+        assert report.smallest_k >= 2
+
+    def test_each_wording_is_really_swapped_in(self):
+        ds = _with_variants(_conflict_dataset())
+        swapped = ds.with_conflict(ds.e_conflict_variants["W3"])
+        assert np.array_equal(swapped.e_conflict, ds.e_conflict_variants["W3"])
+        assert swapped.e_text is ds.e_text
+
+    def test_refuses_a_dataset_without_variants(self):
+        with pytest.raises(ValueError):
+            robustness_over_wordings(_conflict_dataset(), CONFLICT)
+
+    def test_format_names_the_mean_as_the_headline(self):
+        ds = _with_variants(_conflict_dataset())
+        out = format_robustness(robustness_over_wordings(ds, CONFLICT))
+        assert "mean" in out and "headline" in out
+
+    def test_without_tables_trims_every_variant(self):
+        ds = _with_variants(_conflict_dataset())
+        kept = ds.without_tables({"T0"})
+        assert all(v.shape[0] == 20 for v in kept.e_conflict_variants.values())
+
+    def test_rejects_a_variant_of_the_wrong_length(self):
+        ds = _conflict_dataset()
+        with pytest.raises(ValueError):
+            Dataset(
+                e_text=ds.e_text,
+                e_type=ds.e_type,
+                e_rest=ds.e_rest,
+                e_stat=ds.e_stat,
+                column_index=ds.column_index,
+                truth=ds.truth,
+                e_conflict=ds.e_conflict,
+                e_conflict_variants={"orig": ds.e_conflict[:3]},
+            )

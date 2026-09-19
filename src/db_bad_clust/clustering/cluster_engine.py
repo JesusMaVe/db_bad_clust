@@ -306,7 +306,26 @@ class ClusterEngine:
             if label != -1:
                 info["centroids"][int(label)] = X[mask].mean(axis=0).tolist()
 
+        # HDBSCAN's own label-free quality estimate (a fast approximation of
+        # DBCV, available because _fit_hdbscan sets gen_min_span_tree=True).
+        # It is the one number that lets a configuration be chosen without
+        # looking at the ground truth — see experiments.stability_sweep.
+        info["relative_validity"] = self._relative_validity()
+
         self.cluster_info_ = info
+
+    def _relative_validity(self) -> float:
+        if self.method != "hdbscan" or self._model is None:
+            return float("nan")
+        try:
+            import warnings
+
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                value = float(self._model.relative_validity_)
+        except Exception:  # degenerate tree (all noise, one cluster) — no estimate
+            return float("nan")
+        return value if np.isfinite(value) else float("nan")
 
     def get_cluster_members(self, labels: np.ndarray, cluster_id: int) -> np.ndarray:
         """Return indices of samples in a specific cluster."""

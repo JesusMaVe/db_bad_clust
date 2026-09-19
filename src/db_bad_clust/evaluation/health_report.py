@@ -140,7 +140,7 @@ def _table_column_counts(schema: Any) -> dict[str, int]:
 
 
 def build_raw_features(dataset: Dataset, *, include_table_width: bool = True) -> np.ndarray:
-    """Concatenate e_text|e_type|e_rest|e_stat(|table width).
+    """Concatenate e_text|e_type|e_rest|e_stat(|table width)(|e_conflict).
 
     Deliberately not FeatureBuilder.build(): that fusion's z-score/block-normalize
     statistics are computed from whatever matrix is passed to it, so its output is
@@ -152,6 +152,12 @@ def build_raw_features(dataset: Dataset, *, include_table_width: bool = True) ->
     include_table_width appends log1p(number of columns in this column's table),
     read from `dataset.schema` — see the module docstring on why giant_table
     needs it. Raises BadDBError if requested but the pickle carried no schema.
+
+    `e_conflict`, when the pickle carries it, goes in raw: expectation minus
+    declared family, declared family, entropy — none of it corpus-relative, so
+    it is as portable as the other blocks. Measured on the reference corpus
+    without the giants it lifts the out-of-fold F1-macro ceiling from 0.50 to
+    0.58. Reference and target pickles must agree on whether they carry it.
     """
     if include_table_width and dataset.schema is None:
         raise BadDBError(
@@ -165,6 +171,8 @@ def build_raw_features(dataset: Dataset, *, include_table_width: bool = True) ->
             [[np.log1p(counts[key.split(".", 1)[0]])] for key in dataset.column_index]
         )
         blocks.append(widths)
+    if dataset.e_conflict is not None:
+        blocks.append(dataset.e_conflict)
     return np.hstack(blocks)
 
 

@@ -26,13 +26,22 @@ def _experiment(args: argparse.Namespace) -> int:
     """Score the clustering pipeline against the manual ground truth."""
     from db_bad_clust.evaluation.cluster_scoring import write_per_column_csv
     from db_bad_clust.evaluation.experiments import (
+        CONFLICT,
+        CONFLICT_FUSED,
         GIANT_TABLES,
         STRUCTURE_ONLY,
         ablation,
+        cluster_composition,
         evaluate,
+        evaluate_blind,
+        format_blind_table,
         format_diagnostics,
+        format_robustness,
+        format_stability,
         format_table,
         load_dataset,
+        robustness_over_wordings,
+        stability_sweep,
         sweep,
         weights_for,
     )
@@ -74,6 +83,56 @@ def _experiment(args: argparse.Namespace) -> int:
                 }
             )
         )
+
+    if args.conflict or args.stability or args.robustness:
+        if dataset.e_conflict is None:
+            print(
+                f"error: {args.pickle} carries no 'e_conflict' block — rebuild it with "
+                "scripts/build_embeddings.py (--from-pickle works without Oracle)",
+                file=sys.stderr,
+            )
+            return 1
+
+    if args.robustness and not dataset.e_conflict_variants:
+        print(
+            f"error: {args.pickle} carries no 'e_conflict_variants' — rebuild it with "
+            "scripts/build_embeddings.py (--from-pickle works without Oracle)",
+            file=sys.stderr,
+        )
+        return 1
+
+    if args.conflict:
+        print()
+        print("Conflict representation: what the name expects minus what the type declares")
+        print("(every hyper-parameter chosen blind)")
+        configs = [
+            ("document (alpha=1)", weights_for(1.0)),
+            ("conflict", CONFLICT),
+            ("conflict fused", CONFLICT_FUSED),
+        ]
+        runs = [
+            (name, evaluate_blind(name, dataset, weights, algorithm=algorithm))
+            for name, weights in configs
+            for algorithm in ("ward", "hdbscan")
+        ]
+        print(format_blind_table(runs))
+        fused_ward = next(
+            run for name, run in runs if name == "conflict fused" and run.algorithm == "ward"
+        )
+        print()
+        print("Cluster composition, conflict fused / ward (tables spanned is the check):")
+        print(cluster_composition(dataset, fused_ward.evaluation.cluster_ids))
+
+    if args.robustness:
+        for algorithm in ("ward", "hdbscan"):
+            print()
+            print(f"Robustness over anchor wordings — conflict fused / {algorithm}")
+            print(format_robustness(robustness_over_wordings(dataset, CONFLICT_FUSED, algorithm)))
+
+    if args.stability:
+        print()
+        print("HDBSCAN grid, conflict representation — the operating point is chosen blind")
+        print(format_stability(stability_sweep(dataset, CONFLICT)))
 
     if args.baselines:
         from db_bad_clust.evaluation.ml_baselines import (
@@ -169,6 +228,24 @@ def build_parser() -> argparse.ArgumentParser:
         "--baselines",
         action="store_true",
         help="also run the reference points the pipeline has to beat",
+    )
+    experiment.add_argument(
+        "--conflict",
+        action="store_true",
+        help="score the conflict representation (name expectation minus declared type) "
+        "next to the document, with the ARI-against-table leakage column",
+    )
+    experiment.add_argument(
+        "--robustness",
+        action="store_true",
+        help="re-run the blind conflict evaluation once per anchor wording and report "
+        "the mean — the number to quote",
+    )
+    experiment.add_argument(
+        "--stability",
+        action="store_true",
+        help="walk the HDBSCAN grid on the conflict representation and pick the "
+        "operating point by relative validity, never by the labels",
     )
     experiment.set_defaults(func=_experiment)
 

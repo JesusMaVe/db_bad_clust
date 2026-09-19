@@ -25,6 +25,12 @@ Usa `.venv/bin/python -m <cmd>` — los shebangs del venv están obsoletos (la c
 .venv/bin/python -m db_bad_clust.cli experiment --sweep
 .venv/bin/python -m db_bad_clust.cli experiment --without-giants \
     --ablation output/intermediate_02.pkl output/intermediate_docs.pkl output/intermediate_anchors.pkl
+# La representación de conflicto, todo elegido a ciegas, y su robustez ante el fraseo de las anclas
+.venv/bin/python -m db_bad_clust.cli experiment --without-giants \
+    --pickle output/intermediate_docs.pkl --conflict --robustness
+# La rejilla completa de HDBSCAN con la celda elegida por validez
+.venv/bin/python -m db_bad_clust.cli experiment --without-giants \
+    --pickle output/intermediate_docs.pkl --stability
 ```
 
 ```bash
@@ -39,6 +45,8 @@ docker compose up -d                                            # aplica el DDL 
 .venv/bin/python scripts/build_embeddings.py --output output/intermediate_docs.pkl
 .venv/bin/python scripts/build_embeddings.py --semantic anchors --output output/intermediate_anchors.pkl
 .venv/bin/python scripts/build_embeddings.py --no-table-comment --output output/intermediate_docs_nocomment.pkl
+# Sin Oracle: re-embebe usando el esquema guardado en un pickle anterior
+.venv/bin/python scripts/build_embeddings.py --from-pickle output/intermediate_docs.pkl --output output/intermediate_docs.pkl
 
 # intermediate_02.pkl (baseline "viejo", nombre-solo) via notebooks 01+02, headless:
 #   jupyter nbconvert --to notebook --execute --output executed_01.ipynb notebooks/01_data_preparation.ipynb
@@ -177,13 +185,46 @@ el 0.5031 de α=0 no es lo que parece.
   seguir explorándolo vía `evaluate(..., {"epsilon": 0.25, ...})`. Ver
   `docs/research_improving_clustering.md`, candidato #4.
 
+- **Un anti-patrón es un conflicto entre facetas, y una oración las promedia.** Sin gigantes, el
+  clustering del documento tiene ARI **0.593 contra la tabla** de cada columna y 0.111 contra la
+  etiqueta: 14 de 16 clusters son una sola tabla. Quitando la identidad de tabla (sin comentario,
+  centrado por tabla, oración solo de columna) el ARI cae a −0.008 / 0.041 / 0.008. El bloque de
+  conflicto (`ConflictBlock` en `features/semantic_anchors.py`, peso `zeta`) mide por separado qué
+  espera el **nombre** (zero-shot contra 6 familias de almacenamiento) y qué declara el tipo, y
+  resta. Elegido a ciegas sobre la rejilla de HDBSCAN: ARI 0.1276 / AMI 0.2181 / ARI~tbl 0.010,
+  contra 0.0478 / 0.1590 / 0.381 del documento con el mismo protocolo. La mediana de su rejilla
+  (0.1186) supera al máximo de la del documento (0.111). En el corpus completo el documento sigue
+  ganando porque reconoce las tablas gigantes (ARI~tbl 0.884). `zeta` es 0.0 por defecto. Detalle
+  completo: `docs/research_improving_clustering.md`, candidato #6.
+
+- **El bloque de conflicto no se z-scorea por dimensión.** Las indicadoras escasas de la familia
+  declarada reciben z-scores de ±6 y colapsan HDBSCAN a k≈5 y ARI 0. `scale_conflict_subblocks`
+  escala por sub-bloque (diferencia 1.0, declarado 0.7, entropía 0.5). También lee el *nombre*
+  desnudo, nunca el documento ni la tabla.
+
+- **La expectativa del bloque de conflicto es dura, y Ward es el algoritmo principal** (candidato
+  #7). La versión suave (softmax) se aplana con la temperatura o el fraseo, deja dominar al tipo
+  declarado, y el criterio ciego elige k=2 (ARI -0.08). La dura es un one-hot sobre la familia más
+  cercana, con el margen como confianza, y no colapsa con ningún fraseo. Votar o promediar entre
+  fraseos o encoders reintroduce el colapso. Sin gigantes, fusionado, Ward con k por silueta:
+  media de 3 fraseos ARI 0.1256 / AMI 0.2004 / ARI~tbl 0.002, con el fraseo por defecto 0.1693 /
+  0.2464. El documento, igual de ciego, da 0.0505 / 0.2105 / 0.867. **El ARI se duplica; el AMI no
+  mejora de forma limpia.** Reporta la media sobre fraseos: el fraseo por defecto se eligió mirando
+  el ARI.
+
+- **Elige hiperparámetros a ciegas y reporta ARI~tbl.** `min_samples=3` (candidato #1) se eligió
+  mirando el ARI contra las etiquetas. Con elección ciega el documento sin gigantes da ARI 0.0478,
+  no 0.1107. `--stability` elige la celda por `relative_validity_` de HDBSCAN y publica la rejilla
+  entera. `format_table` imprime ARI~tbl (ARI de la partición contra la tabla): un número alto ahí
+  significa que el clustering reconoció tablas, no anti-patrones.
+
 - **Nunca sobrescribas `output/intermediate_02.pkl`.** Es el baseline histórico; un experimento
   que sobrescribe su propio baseline no se puede comprobar.
 
 ## Tests y lint
 
 ```bash
-.venv/bin/python -m pytest tests/ -v      # 436 tests, sin BD y sin descargar el modelo
+.venv/bin/python -m pytest tests/ -v      # 507 tests, sin BD y sin descargar el modelo
 .venv/bin/python -m ruff check src tests scripts   # lint-clean
 ```
 

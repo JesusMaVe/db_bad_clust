@@ -165,3 +165,213 @@ class TestBlock:
     def test_the_block_is_small_enough_to_weigh_against_the_structural_one(self):
         """The point of anchors: a dozen interpretable dimensions, not 384."""
         assert len(CONCEPT_ANCHORS) <= 16
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# The conflict block
+# ═══════════════════════════════════════════════════════════════════════
+
+from db_bad_clust.features.semantic_anchors import (  # noqa: E402
+    CONFLICT_DIM,
+    CONFLICT_SUBBLOCKS,
+    TYPE_FAMILIES,
+    TYPE_FAMILY_ANCHORS,
+    ConflictBlock,
+    declared_family,
+)
+
+
+class FamilyStubEmbedder:
+    """Each family anchor sits on its own unit axis; a name is routed by keyword.
+
+    A name with no matching keyword gets an equal share of every axis, so its
+    expectation comes out flat — the shape a meaningless name (C3) should have.
+    """
+
+    def __init__(self, routing: dict[str, str] | None = None) -> None:
+        self.routing = routing or {}
+        self.seen: list[str] = []
+
+    def encode(self, texts: list[str]) -> np.ndarray:
+        self.seen.extend(texts)
+        out = np.zeros((len(texts), len(TYPE_FAMILIES)), dtype=np.float64)
+        for i, text in enumerate(texts):
+            family = self._family_for(text)
+            if family is None:
+                out[i, :] = 1.0 / np.sqrt(len(TYPE_FAMILIES))
+            else:
+                out[i, TYPE_FAMILIES.index(family)] = 1.0
+        return out
+
+    def _family_for(self, text: str) -> str | None:
+        for family, phrase in TYPE_FAMILY_ANCHORS.items():
+            if text == phrase:
+                return family
+        for needle, family in self.routing.items():
+            if needle in text:
+                return family
+        return None
+
+
+def _idx(family: str) -> int:
+    return TYPE_FAMILIES.index(family)
+
+
+class TestDeclaredFamily:
+    def test_a_date_is_the_date_family_only(self):
+        d = declared_family(_column(data_type="DATE"))
+        assert d[_idx("date")] == 1.0
+        assert d.sum() == 1.0
+
+    def test_a_number_foreign_key_is_amount_and_reference(self):
+        d = declared_family(_column(data_type="NUMBER", is_foreign_key=True))
+        assert d[_idx("amount")] == 1.0
+        assert d[_idx("reference")] == 1.0
+        assert d.sum() == 2.0
+
+    def test_a_char_of_length_one_is_text_and_boolean(self):
+        d = declared_family(_column(name="ACTIVO", data_type="CHAR", data_length=1))
+        assert d[_idx("text")] == 1.0
+        assert d[_idx("boolean")] == 1.0
+
+    def test_a_wide_char_is_text_only(self):
+        d = declared_family(_column(data_type="CHAR", data_length=10))
+        assert d[_idx("boolean")] == 0.0
+        assert d[_idx("text")] == 1.0
+
+    def test_an_unknown_type_declares_nothing(self):
+        assert declared_family(_column(data_type="XMLTYPE")).sum() == 0.0
+
+    def test_layout_constants_agree(self):
+        assert CONFLICT_DIM == 2 * len(TYPE_FAMILIES) + 1
+        assert [name for name, _, _ in CONFLICT_SUBBLOCKS] == ["diff", "declared", "confidence"]
+        assert tuple(TYPE_FAMILY_ANCHORS) == TYPE_FAMILIES
+
+
+class TestExpectation:
+    def test_a_routed_name_is_almost_all_its_family(self):
+        block = ConflictBlock(FamilyStubEmbedder(routing={"fecha": "date"}))
+        p = block.expectation(["fecha nacimiento"])
+        assert p.shape == (1, len(TYPE_FAMILIES))
+        assert p[0, _idx("date")] > 0.99
+        assert p.sum() == pytest.approx(1.0)
+
+    def test_a_meaningless_name_is_flat_in_soft_mode(self):
+        block = ConflictBlock(FamilyStubEmbedder(), mode="soft")
+        p = block.expectation(["c3"])
+        assert np.allclose(p, 1.0 / len(TYPE_FAMILIES))
+
+    def test_hard_mode_is_one_hot_even_for_a_meaningless_name(self):
+        """No temperature, no flattening: the property that stops the collapse."""
+        block = ConflictBlock(FamilyStubEmbedder())
+        p = block.expectation(["c3", "fecha"])
+        assert set(np.unique(p)) <= {0.0, 1.0}
+        assert np.array_equal(p.sum(axis=1), [1.0, 1.0])
+
+    def test_hard_is_the_default(self):
+        assert ConflictBlock(FamilyStubEmbedder()).mode == "hard"
+
+    def test_rejects_an_unknown_mode(self):
+        with pytest.raises(ValueError):
+            ConflictBlock(FamilyStubEmbedder(), mode="medium")
+
+    def test_the_anchors_are_embedded_once(self):
+        embedder = FamilyStubEmbedder()
+        block = ConflictBlock(embedder)
+        block.expectation(["a"])
+        block.expectation(["b"])
+        assert embedder.seen.count(TYPE_FAMILY_ANCHORS["date"]) == 1
+
+    def test_rejects_a_non_positive_temperature(self):
+        with pytest.raises(ValueError):
+            ConflictBlock(FamilyStubEmbedder(), temperature=0.0)
+
+    def test_rejects_anchors_not_keyed_by_the_families(self):
+        with pytest.raises(ValueError):
+            ConflictBlock(FamilyStubEmbedder(), anchors={"fecha": "x"})
+
+
+class TestConflictBuild:
+    def test_shape_is_n_by_thirteen(self):
+        block = ConflictBlock(FamilyStubEmbedder(routing={"fecha": "date"}))
+        out = block.build(["fecha alta", "fecha baja"], [_column(), _column()])
+        assert out.shape == (2, CONFLICT_DIM)
+
+    def test_a_date_name_declared_date_has_zero_diff(self):
+        block = ConflictBlock(FamilyStubEmbedder(routing={"fecha": "date"}))
+        out = block.build(["fecha ingreso"], [_column(data_type="DATE")])
+        diff = out[0, : len(TYPE_FAMILIES)]
+        assert np.allclose(diff, 0.0, atol=1e-6)
+
+    def test_a_date_name_declared_text_conflicts_in_two_directions(self):
+        """The wrong_data_types signature: +1 where the name expects, -1 where the type is."""
+        block = ConflictBlock(FamilyStubEmbedder(routing={"fecha": "date"}))
+        out = block.build(["fecha ingreso"], [_column(data_type="VARCHAR2", data_length=20)])
+        diff = out[0, : len(TYPE_FAMILIES)]
+        assert diff[_idx("date")] == pytest.approx(1.0, abs=1e-6)
+        assert diff[_idx("text")] == pytest.approx(-1.0, abs=1e-6)
+        assert np.allclose(np.delete(diff, [_idx("date"), _idx("text")]), 0.0, atol=1e-6)
+
+    def test_declared_block_is_copied_through(self):
+        block = ConflictBlock(FamilyStubEmbedder())
+        col = _column(data_type="NUMBER", is_foreign_key=True)
+        out = block.build(["x"], [col])
+        declared = out[0, len(TYPE_FAMILIES) : 2 * len(TYPE_FAMILIES)]
+        assert np.array_equal(declared, declared_family(col))
+
+    def test_soft_entropy_is_zero_for_a_sure_name_and_maximal_for_a_flat_one(self):
+        block = ConflictBlock(FamilyStubEmbedder(routing={"fecha": "date"}), mode="soft")
+        out = block.build(["fecha", "c3"], [_column(), _column()])
+        sure, flat = out[0, -1], out[1, -1]
+        assert sure == pytest.approx(0.0, abs=1e-6)
+        assert flat == pytest.approx(np.log(len(TYPE_FAMILIES)), abs=1e-6)
+
+    def test_rejects_mismatched_lengths(self):
+        block = ConflictBlock(FamilyStubEmbedder())
+        with pytest.raises(ValueError):
+            block.build(["a", "b"], [_column()])
+
+    def test_reads_the_name_it_is_given_not_a_document(self):
+        embedder = FamilyStubEmbedder()
+        ConflictBlock(embedder).build(["fecha ingreso"], [_column()])
+        assert "fecha ingreso" in embedder.seen
+        assert not any("tipo" in t for t in embedder.seen if t not in TYPE_FAMILY_ANCHORS.values())
+
+
+class TestHardConfidence:
+    def test_margin_is_one_for_a_name_on_an_anchor_axis(self):
+        """Cosine 1 against its family and 0 against the rest: margin 1."""
+        block = ConflictBlock(FamilyStubEmbedder(routing={"fecha": "date"}))
+        out = block.build(["fecha alta"], [_column()])
+        assert out[0, -1] == pytest.approx(1.0)
+
+    def test_margin_is_zero_for_a_name_equidistant_from_every_anchor(self):
+        block = ConflictBlock(FamilyStubEmbedder())
+        out = block.build(["c3"], [_column()])
+        assert out[0, -1] == pytest.approx(0.0)
+
+    def test_hard_diff_for_a_date_stored_as_text(self):
+        block = ConflictBlock(FamilyStubEmbedder(routing={"fecha": "date"}))
+        out = block.build(["fecha ingreso"], [_column(data_type="VARCHAR2", data_length=20)])
+        assert np.array_equal(out[0, : len(TYPE_FAMILIES)], [1.0, 0.0, 0.0, -1.0, 0.0, 0.0])
+
+
+class TestAnchorVariants:
+    def test_every_variant_is_keyed_by_the_families_in_order(self):
+        from db_bad_clust.features.semantic_anchors import TYPE_FAMILY_ANCHOR_VARIANTS
+
+        assert list(TYPE_FAMILY_ANCHOR_VARIANTS) == ["orig", "W2", "W3"]
+        for anchors in TYPE_FAMILY_ANCHOR_VARIANTS.values():
+            assert tuple(anchors) == TYPE_FAMILIES
+
+    def test_orig_is_the_default_wording(self):
+        from db_bad_clust.features.semantic_anchors import TYPE_FAMILY_ANCHOR_VARIANTS
+
+        assert TYPE_FAMILY_ANCHOR_VARIANTS["orig"] is TYPE_FAMILY_ANCHORS
+
+    def test_every_variant_builds_a_block(self):
+        from db_bad_clust.features.semantic_anchors import TYPE_FAMILY_ANCHOR_VARIANTS
+
+        for anchors in TYPE_FAMILY_ANCHOR_VARIANTS.values():
+            out = ConflictBlock(FamilyStubEmbedder(), anchors=anchors).build(["x"], [_column()])
+            assert out.shape == (1, CONFLICT_DIM)

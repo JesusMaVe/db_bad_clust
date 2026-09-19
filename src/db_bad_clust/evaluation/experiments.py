@@ -47,6 +47,31 @@ PCA_COMPONENTS = 20
 HDBSCAN_MIN_CLUSTER_SIZE = 5
 HDBSCAN_MIN_SAMPLES = 3
 
+# The conflict representation (features/semantic_anchors.py, ConflictBlock):
+# the embeddings are off and the space is name-expectation-minus-declared-type
+# plus the constraints. Every clean column sits near the origin whatever its
+# topic, so the clusters that form are kinds of conflict, not tables — the
+# ARI against the table drops from 0.593 (document) to ~0.02. CONFLICT_FUSED
+# lets a little of the document and the per-table aggregates back in.
+CONFLICT = {"alpha": 0.0, "beta": 0.0, "gamma": 0.5, "delta": 0.0, "epsilon": 0.0, "zeta": 1.0}
+CONFLICT_FUSED = {"alpha": 0.2, "beta": 0.0, "gamma": 0.5, "delta": 0.0, "epsilon": 0.3, "zeta": 1.0}
+
+# The HDBSCAN grid `stability_sweep` walks. The conflict space is 18-dimensional
+# and 153-243 points wide, and its density structure is knife-edge: ARI moves
+# 0.09 → 0.21 between min_cluster_size 5 and 8. The sweep exists so that the
+# operating point is chosen by HDBSCAN's own relative validity, not by the
+# labels — and so the whole grid is reported, not the best cell.
+STABILITY_GRID: tuple[tuple[int, int], ...] = tuple(
+    (mcs, ms) for mcs in (5, 6, 7, 8, 10) for ms in (2, 3, 5)
+)
+
+# Ward's k is chosen by silhouette over this range (candidato #7). On the
+# conflict representation the silhouette peaks at k=17 over the whole 2..40
+# range, so the upper bound is not what picks it; 2 stays in so that a
+# representation that really does split in two is allowed to say so.
+WARD_K_RANGE: tuple[int, int] = (2, 30)
+BLIND_ALGORITHMS = ("ward", "hdbscan")
+
 # The two tables that alone supply every `giant_table` label (90 of 243
 # columns). Excluding them isolates the anti-patterns a per-column encoder can
 # actually see — see `Dataset.without_tables`.
@@ -73,6 +98,15 @@ class Dataset:
     `FeatureBuilder` alongside epsilon; every existing weights dict lacks an
     "epsilon" key, so it defaults to 0.0 and this block contributes nothing
     unless a caller explicitly asks for it.
+
+    `e_conflict` is the raw conflict block (features/semantic_anchors.py,
+    ConflictBlock), stored by build_embeddings.py because it needs the encoder.
+    Same contract as `e_table`: weighted by "zeta", absent from every existing
+    weights dict, so nothing changes until a caller asks. None for pickles
+    built before it existed.
+
+    `e_conflict_variants` holds the same block under each anchor wording
+    (TYPE_FAMILY_ANCHOR_VARIANTS), for `robustness_over_wordings`.
     """
 
     e_text: np.ndarray
@@ -83,6 +117,8 @@ class Dataset:
     truth: list[str] | None = None
     schema: Any = None
     e_table: np.ndarray | None = None
+    e_conflict: np.ndarray | None = None
+    e_conflict_variants: dict[str, np.ndarray] | None = None
 
     def __post_init__(self) -> None:
         lengths = {len(self.column_index), *(b.shape[0] for b in self.blocks)}
@@ -90,6 +126,10 @@ class Dataset:
             lengths.add(len(self.truth))
         if self.e_table is not None:
             lengths.add(self.e_table.shape[0])
+        if self.e_conflict is not None:
+            lengths.add(self.e_conflict.shape[0])
+        for variant in (self.e_conflict_variants or {}).values():
+            lengths.add(variant.shape[0])
         if len(lengths) != 1:
             raise ValueError(f"every block must have the same number of rows, got {sorted(lengths)}")
 
@@ -118,6 +158,27 @@ class Dataset:
             truth=[self.truth[i] for i in keep] if self.truth is not None else None,
             schema=self.schema,
             e_table=self.e_table[keep] if self.e_table is not None else None,
+            e_conflict=self.e_conflict[keep] if self.e_conflict is not None else None,
+            e_conflict_variants=(
+                {name: block[keep] for name, block in self.e_conflict_variants.items()}
+                if self.e_conflict_variants is not None
+                else None
+            ),
+        )
+
+    def with_conflict(self, e_conflict: np.ndarray) -> Dataset:
+        """A copy whose conflict block is replaced — every other block shared."""
+        return Dataset(
+            e_text=self.e_text,
+            e_type=self.e_type,
+            e_rest=self.e_rest,
+            e_stat=self.e_stat,
+            column_index=self.column_index,
+            truth=self.truth,
+            schema=self.schema,
+            e_table=self.e_table,
+            e_conflict=e_conflict,
+            e_conflict_variants=self.e_conflict_variants,
         )
 
 
@@ -163,6 +224,8 @@ def load_dataset(
         from db_bad_clust.features.table_aggregates import build_table_block
 
         e_table = build_table_block(schema, column_index)
+    e_conflict = data.get("e_conflict")
+    variants = data.get("e_conflict_variants")
     return Dataset(
         e_text=np.asarray(data["e_text"], dtype=np.float64),
         e_type=np.asarray(data["e_type"], dtype=np.float64),
@@ -172,6 +235,12 @@ def load_dataset(
         truth=truth,
         schema=schema,
         e_table=e_table,
+        e_conflict=np.asarray(e_conflict, dtype=np.float64) if e_conflict is not None else None,
+        e_conflict_variants=(
+            {name: np.asarray(block, dtype=np.float64) for name, block in variants.items()}
+            if variants is not None
+            else None
+        ),
     )
 
 
@@ -194,6 +263,7 @@ def build_phi(
         e_rest=dataset.e_rest,
         e_stat=dataset.e_stat,
         e_table=dataset.e_table,
+        e_conflict=dataset.e_conflict,
     )
 
 
@@ -269,6 +339,9 @@ def precision_sensitivity(
             column_index=dataset.column_index,
             truth=dataset.truth,
             e_table=dataset.e_table.astype(dtype) if dataset.e_table is not None else None,
+            e_conflict=(
+                dataset.e_conflict.astype(dtype) if dataset.e_conflict is not None else None
+            ),
         )
         phi = build_phi(cast, weights, normalize=normalize).astype(dtype)
         scores[name] = _score_phi(phi, cast, **kwargs).ari
@@ -323,6 +396,30 @@ def _cluster(
     datasets than this corpus (see docs/research_improving_clustering.md,
     Tema 3.2).
     """
+    labels, _ = _cluster_with_info(
+        phi,
+        n_components=n_components,
+        reducer=reducer,
+        reducer_kwargs=reducer_kwargs,
+        min_cluster_size=min_cluster_size,
+        min_samples=min_samples,
+        metric=metric,
+        cluster_selection_method=cluster_selection_method,
+    )
+    return labels
+
+
+def _cluster_with_info(
+    phi: np.ndarray,
+    n_components: int = PCA_COMPONENTS,
+    reducer: str = "pca",
+    reducer_kwargs: dict[str, Any] | None = None,
+    min_cluster_size: int = HDBSCAN_MIN_CLUSTER_SIZE,
+    min_samples: int | None = HDBSCAN_MIN_SAMPLES,
+    metric: str = "euclidean",
+    cluster_selection_method: str = "eom",
+) -> tuple[np.ndarray, dict[str, Any]]:
+    """`_cluster`, plus the engine's `cluster_info_` (relative validity, noise)."""
     from db_bad_clust.clustering.cluster_engine import ClusterEngine
     from db_bad_clust.clustering.dimensionality_reducer import DimensionalityReducer
 
@@ -333,13 +430,15 @@ def _cluster(
         **(reducer_kwargs or {}),
     ).fit_transform(phi)
 
-    return ClusterEngine(
+    engine = ClusterEngine(
         method="hdbscan",
         min_cluster_size=min_cluster_size,
         min_samples=min_samples,
         metric=metric,
         cluster_selection_method=cluster_selection_method,
-    ).fit_predict(reduced)
+    )
+    labels = engine.fit_predict(reduced)
+    return labels, dict(engine.cluster_info_ or {})
 
 
 def _score_phi(
@@ -365,7 +464,7 @@ def _score_phi(
         cluster_selection_method=cluster_selection_method,
     )
     predicted = clusters_to_labels(cluster_ids, dataset.truth)
-    return score("phi", predicted, dataset.truth, group_ids=cluster_ids)
+    return score("phi", predicted, dataset.truth, group_ids=cluster_ids, table_of=dataset.table_of)
 
 
 def evaluate(
@@ -383,10 +482,271 @@ def evaluate(
     cluster_ids = run_clustering(dataset, weights, **kwargs)  # type: ignore[arg-type]
     predicted = clusters_to_labels(cluster_ids, dataset.truth)
     return Evaluation(
-        score=score(name, predicted, dataset.truth, group_ids=cluster_ids),
+        score=score(
+            name, predicted, dataset.truth, group_ids=cluster_ids, table_of=dataset.table_of
+        ),
         cluster_ids=[int(c) for c in cluster_ids],
         predicted=predicted,
     )
+
+
+@dataclass
+class StabilityRow:
+    """One cell of the HDBSCAN grid: its score and its label-free quality."""
+
+    min_cluster_size: int
+    min_samples: int
+    score: ClusterScore
+    relative_validity: float
+    noise_fraction: float
+
+
+def stability_sweep(
+    dataset: Dataset,
+    weights: dict[str, float],
+    grid: tuple[tuple[int, int], ...] = STABILITY_GRID,
+    normalize: str = "block",
+    **kwargs: object,
+) -> list[StabilityRow]:
+    """Score one representation across the HDBSCAN grid, with a label-free pick.
+
+    Every earlier hyper-parameter choice in this repo (min_samples=3 among
+    them) was made by looking at the labelled score, which is tuning on the
+    test set by another name. Each row here also carries HDBSCAN's own
+    `relative_validity_` — a density-based quality estimate that never sees
+    the ground truth — so `choose_operating_point` can pick a cell without
+    peeking. The full grid is the deliverable; the chosen cell is just the one
+    that gets quoted.
+    """
+    phi = build_phi(dataset, weights, normalize=normalize)
+    rows = []
+    for min_cluster_size, min_samples in grid:
+        cluster_ids, info = _cluster_with_info(
+            phi,
+            min_cluster_size=min_cluster_size,
+            min_samples=min_samples,
+            **kwargs,  # type: ignore[arg-type]
+        )
+        predicted = clusters_to_labels(cluster_ids, dataset.truth)
+        rows.append(
+            StabilityRow(
+                min_cluster_size=min_cluster_size,
+                min_samples=min_samples,
+                score=score(
+                    f"mcs={min_cluster_size} ms={min_samples}",
+                    predicted,
+                    dataset.truth,
+                    group_ids=cluster_ids,
+                    table_of=dataset.table_of,
+                ),
+                relative_validity=float(info.get("relative_validity", float("nan"))),
+                noise_fraction=float((np.asarray(cluster_ids) == -1).mean()),
+            )
+        )
+    return rows
+
+
+def choose_operating_point(rows: list[StabilityRow]) -> StabilityRow | None:
+    """The grid cell with the highest relative validity — chosen blind to the labels.
+
+    Cells whose validity is undefined (all noise, a single cluster) are never
+    chosen; if every cell is undefined there is no unsupervised pick and the
+    caller has to say so rather than fall back to the best labelled score.
+    """
+    candidates = [r for r in rows if r.relative_validity == r.relative_validity]
+    return max(candidates, key=lambda r: r.relative_validity) if candidates else None
+
+
+def cluster_composition(dataset: Dataset, cluster_ids: list[int] | np.ndarray) -> str:
+    """One line per cluster: size, top labels, and how many tables it spans.
+
+    The last number is the check that matters for this branch. A cluster that
+    is one table has recognised the table; one that spans twelve has found
+    something the columns share across tables — an anti-pattern, if the top
+    label agrees.
+    """
+    from collections import Counter
+
+    ids = np.asarray(cluster_ids)
+    truth = np.asarray(dataset.truth)
+    tables = np.asarray(dataset.table_of)
+    names = [key.split(".", 1)[1] for key in dataset.column_index]
+    lines = []
+    for cid in sorted(set(ids.tolist())):
+        mask = ids == cid
+        top = ", ".join(f"{label} {n}" for label, n in Counter(truth[mask]).most_common(3))
+        members = [n for n, m in zip(names, mask, strict=True) if m]
+        sample = ", ".join(members[:6])
+        lines.append(
+            f"  {'noise' if cid == -1 else f'cluster {cid}':>10}  n={int(mask.sum()):3d}  "
+            f"tables={len(set(tables[mask])):2d}  [{top}]  e.g. {sample}"
+        )
+    return "\n".join(lines)
+
+
+# ── Blind evaluation: every hyper-parameter chosen without the labels ──
+
+
+def _reduce(phi: np.ndarray, n_components: int = PCA_COMPONENTS) -> np.ndarray:
+    """The same PCA step `_cluster` applies, exposed for the blind paths."""
+    from db_bad_clust.clustering.dimensionality_reducer import DimensionalityReducer
+
+    return DimensionalityReducer(
+        method="pca", n_components=min(n_components, *phi.shape), random_state=42
+    ).fit_transform(phi)
+
+
+def _cluster_ward(
+    reduced: np.ndarray, k_range: tuple[int, int] = WARD_K_RANGE
+) -> tuple[np.ndarray, int, float]:
+    """Ward at every k in the range; keep the partition with the best silhouette.
+
+    Returns (labels, chosen k, its silhouette). Ward assigns every column, so
+    there is no noise class to lump — the reason it replaced HDBSCAN as the
+    main algorithm in candidato #7, where a third of the columns were noise.
+    """
+    from sklearn.metrics import silhouette_score
+
+    from db_bad_clust.clustering.cluster_engine import ClusterEngine
+
+    low, high = k_range
+    high = min(high, reduced.shape[0] - 1)
+    best: tuple[np.ndarray, int, float] | None = None
+    for k in range(max(2, low), high + 1):
+        labels = ClusterEngine(method="agglomerative", n_clusters=k).fit_predict(reduced)
+        if len(set(labels.tolist())) < 2:
+            continue
+        sil = float(silhouette_score(reduced, labels))
+        if best is None or sil > best[2]:
+            best = (labels, k, sil)
+    if best is None:
+        return np.zeros(reduced.shape[0], dtype=int), 1, float("nan")
+    return best
+
+
+def reassign_noise_knn(reduced: np.ndarray, labels: np.ndarray, k: int = 3) -> np.ndarray:
+    """Give every HDBSCAN noise point the majority cluster of its k clustered neighbours.
+
+    The scoring treats -1 as one more cluster, so leaving a third of the corpus
+    as noise lumps unrelated columns into one fake group. Clustered points keep
+    their label. Without any clustered point there is nothing to vote with and
+    the labels come back unchanged.
+    """
+    from sklearn.neighbors import KNeighborsClassifier
+
+    labels = np.asarray(labels).copy()
+    noise = labels == -1
+    clustered = ~noise
+    if not noise.any() or clustered.sum() == 0:
+        return labels
+    knn = KNeighborsClassifier(n_neighbors=min(k, int(clustered.sum())))
+    knn.fit(reduced[clustered], labels[clustered])
+    labels[noise] = knn.predict(reduced[noise])
+    return labels
+
+
+@dataclass
+class BlindEvaluation:
+    """A run whose hyper-parameter was chosen by an internal criterion alone."""
+
+    evaluation: Evaluation
+    algorithm: str
+    chosen: str  # "k=17" or "mcs=6 ms=3"
+    criterion: float  # silhouette (ward) or relative validity (hdbscan)
+
+
+def evaluate_blind(
+    name: str,
+    dataset: Dataset,
+    weights: dict[str, float],
+    algorithm: str = "ward",
+    grid: tuple[tuple[int, int], ...] = STABILITY_GRID,
+    k_range: tuple[int, int] = WARD_K_RANGE,
+) -> BlindEvaluation:
+    """Fuse, reduce, cluster with a label-free choice of hyper-parameter, then score.
+
+    ward:    k by silhouette over `k_range`.
+    hdbscan: the grid cell with the highest relative validity, then noise
+             reassigned to its nearest clusters (`reassign_noise_knn`).
+
+    The labels are used only after the partition exists, to score it.
+    """
+    if algorithm not in BLIND_ALGORITHMS:
+        raise ValueError(f"algorithm must be one of {BLIND_ALGORITHMS}, got {algorithm!r}")
+    reduced = _reduce(build_phi(dataset, weights))
+
+    if algorithm == "ward":
+        labels, k, criterion = _cluster_ward(reduced, k_range)
+        chosen = f"k={k}"
+    else:
+        from db_bad_clust.clustering.cluster_engine import ClusterEngine
+
+        best: tuple[float, np.ndarray, int, int] | None = None
+        for mcs, ms in grid:
+            engine = ClusterEngine(method="hdbscan", min_cluster_size=mcs, min_samples=ms)
+            cell = engine.fit_predict(reduced)
+            validity = float((engine.cluster_info_ or {}).get("relative_validity", float("nan")))
+            if validity != validity:
+                continue
+            if best is None or validity > best[0]:
+                best = (validity, cell, mcs, ms)
+        if best is None:
+            labels, criterion, chosen = np.full(reduced.shape[0], -1), float("nan"), "none"
+        else:
+            criterion, cell, mcs, ms = best
+            labels = reassign_noise_knn(reduced, cell)
+            chosen = f"mcs={mcs} ms={ms}"
+
+    predicted = clusters_to_labels(labels, dataset.truth)
+    evaluation = Evaluation(
+        score=score(name, predicted, dataset.truth, group_ids=labels, table_of=dataset.table_of),
+        cluster_ids=[int(c) for c in labels],
+        predicted=predicted,
+    )
+    return BlindEvaluation(evaluation, algorithm, chosen, criterion)
+
+
+@dataclass
+class RobustnessReport:
+    """One blind run per anchor wording, and what they add up to."""
+
+    algorithm: str
+    rows: list[tuple[str, BlindEvaluation]]
+
+    def _values(self, attr: str) -> np.ndarray:
+        return np.array([getattr(run.evaluation.score, attr) for _, run in self.rows])
+
+    def summary(self, attr: str) -> tuple[float, float, float]:
+        """(mean, min, max) of a ClusterScore field across wordings."""
+        values = self._values(attr)
+        return float(values.mean()), float(values.min()), float(values.max())
+
+    @property
+    def smallest_k(self) -> int:
+        return min(run.evaluation.score.n_groups for _, run in self.rows)
+
+
+def robustness_over_wordings(
+    dataset: Dataset,
+    weights: dict[str, float],
+    algorithm: str = "ward",
+) -> RobustnessReport:
+    """Re-run `evaluate_blind` once per anchor wording in `e_conflict_variants`.
+
+    The anchor wording is part of the conflict representation, and the one in
+    use was chosen while looking at the labelled score. The mean over the
+    wordings is the number to quote; the spread is how much of it is wording.
+    """
+    if not dataset.e_conflict_variants:
+        raise ValueError("this dataset carries no e_conflict_variants")
+    rows = [
+        (
+            wording,
+            evaluate_blind(wording, dataset.with_conflict(block), weights, algorithm=algorithm),
+        )
+        for wording, block in dataset.e_conflict_variants.items()
+    ]
+    return RobustnessReport(algorithm, rows)
 
 
 def evaluate_late_fusion(
@@ -547,7 +907,12 @@ TABLE_SCORE_COLUMNS = [
     Column("Accuracy", 9),
     Column("F1-macro", 9),
     Column("k", 4),
+    Column("ARI~tbl", 8),
 ]
+
+
+def _fmt_table_ari(value: float) -> str:
+    return f"{value:.4f}" if value == value else "n/a"
 
 
 def format_table(rows: list[ClusterScore]) -> str:
@@ -562,6 +927,7 @@ def format_table(rows: list[ClusterScore]) -> str:
             f"{r.accuracy:.4f}",
             f"{r.f1_macro:.4f}",
             str(r.n_groups),
+            _fmt_table_ari(r.table_ari),
         ]
         for r in rows
     ]
@@ -570,5 +936,108 @@ def format_table(rows: list[ClusterScore]) -> str:
         "",
         "Accuracy/F1 use ground-truth-assisted cluster naming — an upper bound.",
         "AMI, not NMI, is the one to compare across rows with different k.",
+        "ARI~tbl is the partition's ARI against the TABLE of each column: table",
+        "identity leaking into the clusters, not anti-pattern detection.",
     ]
+    return "\n".join(lines)
+
+
+STABILITY_COLUMNS = [
+    Column("mcs", 4),
+    Column("ms", 3),
+    Column("ARI", 8),
+    Column("AMI", 8),
+    Column("F1-macro", 9),
+    Column("k", 4),
+    Column("noise", 6),
+    Column("ARI~tbl", 8),
+    Column("validity", 9),
+]
+
+
+def format_stability(rows: list[StabilityRow]) -> str:
+    """The HDBSCAN grid, with the label-free pick marked."""
+    chosen = choose_operating_point(rows)
+    table_rows = []
+    for r in rows:
+        s = r.score
+        validity = f"{r.relative_validity:.4f}" if r.relative_validity == r.relative_validity else "n/a"
+        if chosen is r:
+            validity += " *"
+        table_rows.append(
+            [
+                str(r.min_cluster_size),
+                str(r.min_samples),
+                f"{s.ari:.4f}",
+                f"{s.ami:.4f}",
+                f"{s.f1_macro:.4f}",
+                str(s.n_groups),
+                f"{r.noise_fraction:.0%}",
+                _fmt_table_ari(s.table_ari),
+                validity,
+            ]
+        )
+    columns = [Column(c.header, c.width + (2 if c.header == "validity" else 0), c.align) for c in STABILITY_COLUMNS]
+    lines = [render_table(columns, table_rows), ""]
+    if chosen is None:
+        lines.append("No cell has a defined relative validity — no unsupervised pick is possible.")
+    else:
+        lines.append(
+            f"* chosen by HDBSCAN relative validity (label-free): "
+            f"mcs={chosen.min_cluster_size} ms={chosen.min_samples} → "
+            f"ARI {chosen.score.ari:.4f}, AMI {chosen.score.ami:.4f}. The best labelled"
+        )
+        lines.append("  cell is NOT the result; quoting it would be tuning on the test set.")
+    return "\n".join(lines)
+
+
+BLIND_COLUMNS = [
+    Column("Configuration", 22, "<"),
+    Column("algorithm", 9, "<"),
+    Column("chosen", 11, "<"),
+    Column("ARI", 8),
+    Column("AMI", 8),
+    Column("F1-macro", 9),
+    Column("k", 4),
+    Column("ARI~tbl", 8),
+]
+
+
+def _blind_row(label: str, run: BlindEvaluation) -> list[str]:
+    s = run.evaluation.score
+    return [
+        label,
+        run.algorithm,
+        run.chosen,
+        f"{s.ari:.4f}",
+        f"{s.ami:.4f}",
+        f"{s.f1_macro:.4f}",
+        str(s.n_groups),
+        _fmt_table_ari(s.table_ari),
+    ]
+
+
+def format_blind_table(runs: list[tuple[str, BlindEvaluation]]) -> str:
+    """Blind runs side by side, with the hyper-parameter each one chose."""
+    lines = [
+        render_table(BLIND_COLUMNS, [_blind_row(label, run) for label, run in runs]),
+        "",
+        "Every hyper-parameter above was chosen without the labels: Ward's k by",
+        "silhouette, HDBSCAN's cell by relative validity (noise then reassigned by kNN).",
+        "F1 is still an upper bound — majority-vote naming reads the labels.",
+    ]
+    return "\n".join(lines)
+
+
+def format_robustness(report: RobustnessReport) -> str:
+    """Per-wording rows, then mean / min / max — the mean is the number to quote."""
+    table_rows = [_blind_row(wording, run) for wording, run in report.rows]
+    lines = [render_table(BLIND_COLUMNS, table_rows), ""]
+    for attr, label in (("ari", "ARI"), ("ami", "AMI"), ("table_ari", "ARI~tbl")):
+        mean, low, high = report.summary(attr)
+        lines.append(f"  {label:8s} mean {mean:.4f}   min {low:.4f}   max {high:.4f}")
+    lines.append(f"  smallest k across wordings: {report.smallest_k}")
+    lines.append("")
+    lines.append("The mean is the headline. The default wording was chosen while looking")
+    lines.append("at the labelled score, so its row alone would overstate the method.")
     return "\n".join(lines)

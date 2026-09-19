@@ -198,6 +198,7 @@ class TestWeightApplication:
             "gamma": 0.25,
             "delta": 0.05,
             "epsilon": 0.0,
+            "zeta": 0.0,
         }
 
     def test_alpha_zero(
@@ -313,6 +314,7 @@ class TestWeightApplication:
             "gamma": 0.1,
             "delta": 0.05,
             "epsilon": 0.0,
+            "zeta": 0.0,
         }
         phi = builder.build(small_embeddings, small_type_encoding, small_constraint_encoding)
         assert phi.shape == (5, 785)
@@ -486,3 +488,77 @@ class TestBlockNormalization:
     def test_unknown_mode_is_rejected(self) -> None:
         with pytest.raises(ValueError, match="normalize"):
             FeatureBuilder(normalize="minmax")
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# The conflict block and zeta
+# ═══════════════════════════════════════════════════════════════════════
+
+from db_bad_clust.features.feature_builder import scale_conflict_subblocks  # noqa: E402
+from db_bad_clust.features.semantic_anchors import CONFLICT_DIM, CONFLICT_SUBBLOCKS  # noqa: E402
+
+
+def _raw_conflict(n: int = 5) -> np.ndarray:
+    rng = np.random.default_rng(3)
+    return rng.normal(size=(n, CONFLICT_DIM))
+
+
+class TestScaleConflictSubblocks:
+    def test_each_subblock_has_total_variance_equal_to_its_weight_squared(self):
+        scaled = scale_conflict_subblocks(_raw_conflict(50))
+        start = 0
+        for _, width, weight in CONFLICT_SUBBLOCKS:
+            block = scaled[:, start : start + width]
+            assert block.var(axis=0).sum() == pytest.approx(weight**2, rel=1e-9)
+            start += width
+
+    def test_a_sparse_indicator_column_does_not_dominate(self):
+        """The reason the block is not z-scored per dimension: a column with a
+        single 1 gets a z-score of ±7 that way and rules every distance."""
+        raw = _raw_conflict(50)
+        raw[:, 6:12] = 0.0
+        raw[0, 8] = 1.0  # one `reference` in fifty rows
+        scaled = scale_conflict_subblocks(raw)
+        declared = scaled[:, 6:12]
+        assert declared.var(axis=0).sum() == pytest.approx(0.7**2, rel=1e-9)
+        assert np.abs(declared).max() < 7.0
+
+    def test_rejects_the_wrong_width(self):
+        with pytest.raises(ValueError):
+            scale_conflict_subblocks(np.zeros((5, CONFLICT_DIM - 1)))
+
+
+class TestZeta:
+    def test_zeta_zero_present_block_contributes_nothing(
+        self, small_embeddings, small_type_encoding, small_constraint_encoding
+    ):
+        builder = FeatureBuilder(alpha=0.4, beta=0.3, gamma=0.25)
+        phi = builder.build(
+            small_embeddings, small_type_encoding, small_constraint_encoding,
+            e_conflict=_raw_conflict(),
+        )
+        assert phi.shape == (5, 768 + 12 + 5 + CONFLICT_DIM)
+        assert np.allclose(phi[:, -CONFLICT_DIM:], 0.0)
+
+    def test_zeta_nonzero_block_carries_its_share(
+        self, small_embeddings, small_type_encoding, small_constraint_encoding
+    ):
+        builder = FeatureBuilder(alpha=0.0, beta=0.0, gamma=0.0, delta=0.0, zeta=1.0)
+        phi = builder.build(
+            small_embeddings, small_type_encoding, small_constraint_encoding,
+            e_conflict=_raw_conflict(),
+        )
+        assert phi[:, -CONFLICT_DIM:].var(axis=0).sum() == pytest.approx(1.0, rel=1e-9)
+        assert np.allclose(phi[:, :-CONFLICT_DIM], 0.0)
+
+    def test_zeta_is_reported_in_weights_and_shares(self):
+        builder = FeatureBuilder(alpha=0.0, beta=0.0, gamma=0.0, delta=0.0, zeta=1.0)
+        assert builder.weights["zeta"] == 1.0
+        assert builder.variance_shares["zeta"] == pytest.approx(1.0)
+
+    def test_omitting_the_block_changes_nothing(
+        self, small_embeddings, small_type_encoding, small_constraint_encoding
+    ):
+        builder = FeatureBuilder(alpha=0.4, beta=0.3, gamma=0.25, zeta=1.0)
+        phi = builder.build(small_embeddings, small_type_encoding, small_constraint_encoding)
+        assert phi.shape == (5, 768 + 12 + 5)

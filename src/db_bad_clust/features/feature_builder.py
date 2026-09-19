@@ -40,6 +40,31 @@ from __future__ import annotations
 
 import numpy as np
 
+from db_bad_clust.features.semantic_anchors import CONFLICT_DIM, CONFLICT_SUBBLOCKS
+
+
+def scale_conflict_subblocks(raw: np.ndarray) -> np.ndarray:
+    """Scale the raw conflict block sub-block by sub-block, not dimension by dimension.
+
+    `ConflictBlock.build` returns [expectation - declared (6) | declared (6) |
+    confidence (1)]. Z-scoring those 13 columns individually, as `_normalize` does
+    for every other block, hands the sparse indicator columns of `declared`
+    (`reference`, `boolean`: a handful of ones) z-scores of ±6 and lets them
+    dominate every distance — measured, that variant collapses HDBSCAN to k≈5
+    and ARI 0 on the corpus. Each sub-block is therefore z-scored, scaled to
+    unit total variance and multiplied by its own weight (CONFLICT_SUBBLOCKS),
+    so the geometry is the one that was actually found to cluster:
+    diff 1.0 : declared 0.7 : confidence 0.5.
+    """
+    if raw.shape[1] != CONFLICT_DIM:
+        raise ValueError(f"conflict block must have {CONFLICT_DIM} columns, got {raw.shape[1]}")
+    parts, start = [], 0
+    for _, width, weight in CONFLICT_SUBBLOCKS:
+        block = FeatureBuilder._zscore(raw[:, start : start + width])
+        parts.append(weight * FeatureBuilder._unit_variance_block(block))
+        start += width
+    return np.concatenate(parts, axis=1)
+
 
 class FeatureBuilder:
     """
@@ -53,6 +78,9 @@ class FeatureBuilder:
       epsilon (table aggs)   = 0.00  — per-table aggregate weight, off by default;
                                         see features/table_aggregates.py. Zero-weighted
                                         but present blocks are harmless (see `build`).
+      zeta (conflict)        = 0.00  — name-expectation-minus-declared-type block, off
+                                        by default; see features/semantic_anchors.py
+                                        (ConflictBlock) and `scale_conflict_subblocks`.
 
     Args:
       normalize: "block" (default) scales every block to unit total variance
@@ -70,6 +98,7 @@ class FeatureBuilder:
         gamma: float = 0.25,
         delta: float = 0.05,
         epsilon: float = 0.0,
+        zeta: float = 0.0,
         normalize: str = "block",
     ) -> None:
         if normalize not in self.VALID_NORMALIZERS:
@@ -81,6 +110,7 @@ class FeatureBuilder:
         self.gamma = gamma
         self.delta = delta
         self.epsilon = epsilon
+        self.zeta = zeta
         self.normalize = normalize
         self._fitted = False
 
@@ -133,6 +163,7 @@ class FeatureBuilder:
         e_rest: np.ndarray,
         e_stat: np.ndarray | None = None,
         e_table: np.ndarray | None = None,
+        e_conflict: np.ndarray | None = None,
     ) -> np.ndarray:
         """
         Build the composite vector φ(aⱼ).
@@ -144,9 +175,14 @@ class FeatureBuilder:
             e_stat: Statistical (optional)     shape (N, s)
             e_table: Per-table aggregates (optional), weighted by epsilon —
                 see features/table_aggregates.py. shape (N, 5)
+            e_conflict: Raw conflict block (optional), weighted by zeta — the
+                output of `ConflictBlock.build`, shape (N, 13). Scaled by
+                `scale_conflict_subblocks` (per sub-block) rather than by
+                `_normalize` (per dimension); see that function for the reason.
 
         Returns:
-            numpy array shape (N, d) where d = d_text + n_types + 5 + (s or 0) + (5 or 0)
+            numpy array shape (N, d) where
+            d = d_text + n_types + 5 + (s or 0) + (5 or 0) + (13 or 0)
         """
         assert e_text.shape[0] == e_type.shape[0] == e_rest.shape[0], (
             "All matrices must have the same number of rows"
@@ -175,6 +211,12 @@ class FeatureBuilder:
             e_table_w = self.epsilon * e_table_norm
             components.append(e_table_w)
 
+        if e_conflict is not None:
+            # Sub-block scaling first, then the whole block to unit total
+            # variance so zeta is a real share like every other weight.
+            e_conflict_norm = self._unit_variance_block(scale_conflict_subblocks(e_conflict))
+            components.append(self.zeta * e_conflict_norm)
+
         phi = np.concatenate(components, axis=1)
 
         self._fitted = True
@@ -196,6 +238,7 @@ class FeatureBuilder:
             "gamma": self.gamma,
             "delta": self.delta,
             "epsilon": self.epsilon,
+            "zeta": self.zeta,
         }
 
     @property
