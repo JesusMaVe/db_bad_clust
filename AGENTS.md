@@ -222,6 +222,12 @@ el 0.5031 de α=0 no es lo que parece.
   (ARI -0.079 [-0.128, -0.032]). El lector se vuelve más estable (acuerdo 0.77 contra 0.63) sin
   volverse más acertado. Se quedan las frases.
 
+- **Lector por inferencia (NLI): resultado negativo.** Tres modelos XNLI (BERT español, MiniLMv2 y
+  mDeBERTa multilingües) como lector del nombre dan ARI medio de -0.03 a 0.05 sin gigantes, contra
+  0.126 del coseno. Sobre 18 nombres inequívocos aciertan de 8 a 11; el coseno, 18. Un nombre
+  desnudo no es una premisa. El lector actual solo falla en nombres ambiguos de verdad, y ninguna
+  palanca probada sobre el lector los resuelve.
+
 - **Una diferencia se afirma solo con su intervalo pareado** (`--bootstrap N`). Ambos modos
   submuestrean sin reemplazo: con reemplazo, las columnas duplicadas inflan ARI y AMI.
 

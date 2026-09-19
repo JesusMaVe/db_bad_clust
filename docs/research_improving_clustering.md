@@ -729,6 +729,49 @@ Lectura:
 - La siguiente palanca de la lista es cambiar la forma de leer, no las anclas: un clasificador de
   inferencia (NLI) multilingüe en lugar del coseno. Requiere descargar un modelo.
 
+
+#### Lector por inferencia (NLI) en lugar del coseno (2026-09-19): resultado negativo
+
+Hipótesis: un modelo entrenado para decidir si una frase se sigue de otra leería mejor el nombre
+que un coseno entre vectores. La premisa es el nombre de la columna y cada familia es una hipótesis.
+La puntuación de implicación reemplaza al coseno. El resto no cambia: expectativa dura con margen,
+Ward con k por silueta, el fusionado, y las tres redacciones de las frases como hipótesis.
+
+Se probaron tres modelos multilingües con licencia MIT, todos de la familia BERT:
+`Recognai/bert-base-spanish-wwm-cased-xnli` (BERT en español), `MoritzLaurer/multilingual-MiniLMv2-L6-mnli-xnli`
+y `MoritzLaurer/mDeBERTa-v3-base-xnli-multilingual-nli-2mil7`. Premisa: "Nombre de la columna: {nombre}."
+
+| lector, media de 3 redacciones | sin gigantes ARI / AMI | completo ARI / AMI | acuerdo entre redacciones, sin gigantes |
+| ------------------------------ | ---------------------: | -----------------: | -------------------------------------: |
+| **coseno MiniLM (actual)**     |    **0.1256 / 0.2004** | **0.3561 / 0.3729** |                                   0.63 |
+| NLI BERT español               |       -0.0284 / 0.0838 |    0.0482 / 0.1181 |                                   0.41 |
+| NLI MiniLMv2 multilingüe       |        0.0282 / 0.1193 |    0.1504 / 0.2001 |                                   0.77 |
+| NLI mDeBERTa multilingüe       |        0.0471 / 0.1503 |    0.1894 / 0.2658 |                                   0.23 |
+
+La diferencia es demasiado grande para no dudar del montaje, así que se revisó sin etiquetas. Se
+escribieron 18 nombres inequívocos con su familia obvia, como "fecha nacimiento" para fecha,
+"salario" para importe, "activo" para booleano o "imagen" para binario. Se probaron tres plantillas
+de premisa e hipótesis, incluida la estándar de zero-shot, "Este ejemplo es {familia}.":
+
+| lector                    | aciertos de 18, según plantilla |
+| ------------------------- | ------------------------------: |
+| coseno MiniLM (actual)    |                              18 |
+| NLI BERT español          |                        8, 9, 10 |
+| NLI MiniLMv2 multilingüe  |                       8, 8, 10  |
+| NLI mDeBERTa multilingüe  |                      8, 10, 11  |
+
+Lectura:
+
+- **No se adopta.** Los modelos NLI fallan en los casos fáciles, no solo en los ambiguos. Cambiar
+  la plantilla no lo arregla. Un nombre de columna desnudo no es una frase que implique algo, que es
+  lo que estos modelos aprendieron a juzgar.
+- **El coseno acierta todos los casos obvios.** Lo que le queda al lector actual son los nombres
+  ambiguos de verdad, como `MONTO` (fecha o importe), `NIVEL` o `INTENTOS_FALLIDOS`. Ninguna
+  palanca probada sobre el lector (redacción, votación, ejemplos, contexto, otros encoders, NLI)
+  mejora esa parte.
+- La lista de 18 nombres la escribió quien hizo el experimento. Es una prueba de validez aparente,
+  no una medida. Sirve para descartar un fallo del montaje, no para puntuar lectores.
+
 ---
 
 ## Referencias
