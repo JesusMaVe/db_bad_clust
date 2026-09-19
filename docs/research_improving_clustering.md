@@ -692,6 +692,43 @@ tres fraseos pierden en AMI por entre -0.07 y -0.08, con intervalos que excluyen
 - **Ward frente a HDBSCAN para el documento:** no hay diferencia. Para el conflicto, Ward es igual
   sin gigantes y claramente mejor con el corpus completo.
 
+
+#### Anclas hechas de nombres de ejemplo (2026-09-19): resultado negativo
+
+Hipótesis: el lector compara nombres de dos palabras contra frases completas ("este campo guarda
+una fecha, un momento…"). Si cada familia se describe con nombres de columna de ejemplo, el lector
+compararía nombres contra nombres y leería mejor.
+
+Se escribieron tres conjuntos independientes de 7 u 8 nombres inventados por familia. E1 y E2 están
+en español; E3 mezcla inglés y español. Se descartó cualquier ejemplo idéntico a un nombre de
+columna del esquema: `es_activo` en E2, y `monto`, `nombre` y `activo` en E3. Cada familia se
+representó de dos maneras: por el centroide de sus ejemplos, o por el ejemplo más cercano a la
+columna. Se usaron expectativa dura, Ward con k por silueta y el fusionado, igual que el candidato #7.
+
+| anclas, media de 3 conjuntos | sin gigantes ARI / AMI | completo ARI / AMI | acuerdo del lector entre conjuntos, sin gigantes / completo |
+| ---------------------------- | ---------------------: | -----------------: | ---------------------------------------------------------: |
+| frases (candidato #7)        |        0.1256 / 0.2004 |    0.3561 / 0.3729 |                                                0.63 / 0.53 |
+| centroide de ejemplos        |        0.1392 / 0.1849 |    0.2704 / 0.3341 |                                                0.77 / 0.64 |
+| ejemplo más cercano          |        0.0985 / 0.1809 |    0.2827 / 0.3977 |                                                0.69 / 0.62 |
+
+Bootstrap pareado, 300 submuestras del 80 %, centroide menos frases:
+
+| corpus       | Δ ARI [IC 95 %]          | gana | Δ AMI [IC 95 %]          | gana |
+| ------------ | ------------------------ | ---: | ------------------------ | ---: |
+| sin gigantes | +0.016 [-0.008, +0.043]  |  90 % | -0.008 [-0.033, +0.016] |  27 % |
+| completo     | -0.079 [-0.128, -0.032]  |   0 % | -0.014 [-0.063, +0.036] |  36 % |
+
+Lectura:
+
+- **No se adopta.** Sin gigantes empata. En el corpus completo pierde en ARI, con un intervalo que
+  excluye el cero.
+- **Un lector más estable no es un lector más acertado.** Con centroides, los tres conjuntos
+  coinciden más entre sí: 0.77 frente a 0.63 sin gigantes. Pero el agrupamiento no mejora, así que
+  el acuerdo entre redacciones no era la medida del problema. Los tres conjuntos de ejemplos pueden
+  coincidir en leer mal la misma columna.
+- La siguiente palanca de la lista es cambiar la forma de leer, no las anclas: un clasificador de
+  inferencia (NLI) multilingüe en lugar del coseno. Requiere descargar un modelo.
+
 ---
 
 ## Referencias

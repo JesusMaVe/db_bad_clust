@@ -217,6 +217,11 @@ el 0.5031 de α=0 no es lo que parece.
   mejor en AMI por ~0.07 (el intervalo excluye el cero) y empata en ARI. Reporta la media sobre
   fraseos: el fraseo por defecto se eligió mirando el ARI.
 
+- **Anclas hechas de nombres de ejemplo: resultado negativo.** Centroides de 3 conjuntos de nombres
+  inventados empatan sin gigantes (ARI +0.016 [-0.008, +0.043]) y pierden en el corpus completo
+  (ARI -0.079 [-0.128, -0.032]). El lector se vuelve más estable (acuerdo 0.77 contra 0.63) sin
+  volverse más acertado. Se quedan las frases.
+
 - **Una diferencia se afirma solo con su intervalo pareado** (`--bootstrap N`). Ambos modos
   submuestrean sin reemplazo: con reemplazo, las columnas duplicadas inflan ARI y AMI.
 
