@@ -228,6 +228,14 @@ el 0.5031 de α=0 no es lo que parece.
   desnudo no es una premisa. El lector actual solo falla en nombres ambiguos de verdad, y ninguna
   palanca probada sobre el lector los resuelve.
 
+- **Señal nueva para `inconsistent_naming`/`polymorphic`/`eav`/`reserved_words`: negativo, por
+  granularidad.** Cinco señales de BERT sobre el nombre y sus hermanos no ayudan: con peso chico no
+  mueven nada, y con peso grande agrupan esas clases pero rompen los clusters de conflicto (ARI
+  0.126 → 0.04–0.06). Tres de las cuatro son propiedades de la tabla (`CONFIGURACION` 6/6,
+  `TBL_DATOS` 9/9, `REPORTES` 4/6). Los conflictos de tipo cruzan tablas, y estas clases viven dentro
+  de una. Un solo clustering plano de columnas no sirve a las dos. La vía que queda es un diseño en
+  dos niveles (columnas y tablas).
+
 - **Una diferencia se afirma solo con su intervalo pareado** (`--bootstrap N`). Ambos modos
   submuestrean sin reemplazo: con reemplazo, las columnas duplicadas inflan ARI y AMI.
 

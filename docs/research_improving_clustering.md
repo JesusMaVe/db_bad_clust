@@ -772,6 +772,67 @@ Lectura:
 - La lista de 18 nombres la escribió quien hizo el experimento. Es una prueba de validez aparente,
   no una medida. Sirve para descartar un fallo del montaje, no para puntuar lectores.
 
+
+#### Señal nueva para `inconsistent_naming`, `polymorphic`, `eav` y `reserved_words` (2026-09-19): resultado negativo, con diagnóstico
+
+El bloque de conflicto no puede ver estas cuatro clases por diseño: suman 38 de las 153 columnas sin
+gigantes. Se buscó una señal nueva hecha con BERT (MiniLM), sin etiquetas y sin reglas.
+
+**Qué son estas clases en el corpus.** Tres de las cuatro son propiedades de la tabla o de los
+hermanos, no de la columna:
+
+| clase                 | dónde está                                                                  |
+| --------------------- | --------------------------------------------------------------------------- |
+| `eav`                 | `CONFIGURACION`, 6 de 6 columnas, `ID` incluido                             |
+| `inconsistent_naming` | `TBL_DATOS` 9 de 9, `ORDENES_COMPRA` 8 de 11, cuatro `FLAG_*` de `TODO_EN_UNO` |
+| `reserved_words`      | `REPORTES`, 4 de 6                                                          |
+| `polymorphic`         | nombres con "o" (`FECHA_O_DIRECCION`) y discriminadores (`TIPO`, `TIPO_REGISTRO`) |
+
+Solo 2 de las 38 columnas son indistinguibles por construcción: `CONFIGURACION.ID` y
+`CONFIGURACION.ACTIVO`. Tienen un gemelo exacto en otra tabla, con el mismo nombre, tipo y
+restricciones, pero con otra etiqueta.
+
+**Cinco señales, todas sobre el nombre desnudo:**
+
+1. **vacío semántico**: 1 menos el mejor coseno contra las 6 familias.
+2. **divergencia interna**: la mayor distancia entre las palabras del propio nombre.
+3. **atípico entre hermanos**: la distancia al centroide de los demás nombres de la tabla.
+4. **choque de convención**: el mayor coseno con un hermano de escritura distinta.
+5. **heterogeneidad de la tabla**: la distancia media entre los nombres de la tabla.
+
+Separan poco. Por etiqueta, el vacío semántico vale 0.65–0.69 en `inconsistent_naming` y
+`reserved_words`, contra 0.58 en `clean`. El choque vale 0.75 en `inconsistent_naming`, contra 0.62
+en `clean`. La divergencia es mayor en `impossible_data` (0.35) que en `polymorphic` (0.26).
+
+**Añadidas al fusionado** (Ward ciego, media de 3 redacciones, sin gigantes; "pares juntos" es la
+fracción de pares de la clase que caen en el mismo cluster):
+
+| configuración                       |    ARI |    AMI | ARI~tbl | pares `eav` | pares `reserved` |
+| ----------------------------------- | -----: | -----: | ------: | ----------: | ---------------: |
+| base                                | 0.1256 | 0.2004 |   0.002 |        0.02 |             0.28 |
+| + las 5 señales, peso 0.35          | 0.1291 | 0.2080 |   0.002 |        0.02 |             0.28 |
+| + las 5 señales, peso 2.0           | 0.0412 | 0.1565 |   0.074 |        0.11 |             0.50 |
+| solo las 5 señales                  | 0.0349 |      — |       — |        0.40 |             0.50 |
+| + medias por tabla de 1–4, peso 1.0 | 0.0575 | 0.1609 |   0.112 |        0.69 |             0.83 |
+
+Lectura:
+
+- **No se adopta ninguna.** Con peso chico no mueven las columnas objetivo. Con peso grande agrupan
+  mejor las clases objetivo, pero rompen los clusters de conflicto y el ARI total cae a 0.04–0.06.
+- **El problema es de granularidad, no de señal.** Los conflictos de tipo agrupan columnas de muchas
+  tablas: su ARI~tbl es cercano a 0. Estas cuatro clases agrupan columnas de una misma tabla. Un
+  solo clustering plano de columnas no puede servir a las dos cosas a la vez. La medida por tabla lo
+  muestra: al subir su peso, `eav` y `reserved_words` se juntan, del 2 % al 69 % y del 28 % al 83 %,
+  pero todo lo demás se desordena.
+- **Esto explica también `giant_table`**, la otra clase que es propiedad de la tabla, y por qué el
+  documento gana en el corpus completo: reconoce tablas (ARI~tbl 0.96), y en estas clases reconocer
+  la tabla es acertar la etiqueta.
+- **La vía que queda es un diseño en dos niveles.** Un clustering de columnas por conflicto para los
+  anti-patrones de columna, y un clustering de tablas, con señales de BERT sobre el conjunto de
+  nombres de cada tabla, para los anti-patrones de tabla: `giant_table`, `eav`, `inconsistent_naming`
+  de tabla entera y `reserved_words`. Requiere decidir cómo se etiqueta y se puntúa una tabla, y solo
+  hay 23 tablas, así que la evaluación de ese nivel tendrá poca potencia estadística.
+
 ---
 
 ## Referencias
