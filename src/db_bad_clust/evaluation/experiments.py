@@ -19,6 +19,7 @@ Usage:
 from __future__ import annotations
 
 import pickle
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -148,7 +149,11 @@ class Dataset:
 
     def without_tables(self, tables: set[str] | frozenset[str]) -> Dataset:
         """A copy with every column of the named tables removed."""
-        keep = [i for i, t in enumerate(self.table_of) if t not in tables]
+        return self.subset([i for i, t in enumerate(self.table_of) if t not in tables])
+
+    def subset(self, keep: list[int] | np.ndarray) -> Dataset:
+        """A copy restricted to the rows in `keep`, in that order (repeats allowed)."""
+        keep = [int(i) for i in keep]
         return Dataset(
             e_text=self.e_text[keep],
             e_type=self.e_type[keep],
@@ -747,6 +752,239 @@ def robustness_over_wordings(
         for wording, block in dataset.e_conflict_variants.items()
     ]
     return RobustnessReport(algorithm, rows)
+
+
+# ── Bootstrap: are the differences between configurations real? ─────
+
+
+Scorer = Callable[[Dataset], dict[str, float]]
+BOOTSTRAP_METRICS = ("ari", "ami", "table_ari")
+
+
+def _metrics(score_: ClusterScore) -> dict[str, float]:
+    return {"ari": score_.ari, "ami": score_.ami, "table_ari": score_.table_ari}
+
+
+def blind_scorer(
+    weights: dict[str, float], algorithm: str = "ward", wording: str | None = None
+) -> Scorer:
+    """A scorer that runs `evaluate_blind`, optionally on one anchor wording."""
+
+    def run(dataset: Dataset) -> dict[str, float]:
+        if wording is not None:
+            if not dataset.e_conflict_variants or wording not in dataset.e_conflict_variants:
+                raise ValueError(f"dataset carries no conflict variant {wording!r}")
+            dataset = dataset.with_conflict(dataset.e_conflict_variants[wording])
+        return _metrics(evaluate_blind("b", dataset, weights, algorithm=algorithm).evaluation.score)
+
+    return run
+
+
+def mean_over_wordings_scorer(weights: dict[str, float], algorithm: str = "ward") -> Scorer:
+    """The headline number: `evaluate_blind` once per anchor wording, averaged."""
+
+    def run(dataset: Dataset) -> dict[str, float]:
+        if not dataset.e_conflict_variants:
+            raise ValueError("this dataset carries no e_conflict_variants")
+        per = [
+            blind_scorer(weights, algorithm, wording)(dataset)
+            for wording in dataset.e_conflict_variants
+        ]
+        return {m: float(np.mean([p[m] for p in per])) for m in BOOTSTRAP_METRICS}
+
+    return run
+
+
+@dataclass
+class BootstrapResult:
+    """Per-configuration metric samples over the same resamples, and the point estimate."""
+
+    mode: str
+    n_boot: int
+    frac: float
+    point: dict[str, dict[str, float]]
+    samples: dict[str, dict[str, np.ndarray]]
+
+    def interval(self, name: str, metric: str, level: float = 0.95) -> tuple[float, float]:
+        values = self.samples[name][metric]
+        tail = (1.0 - level) / 2.0 * 100.0
+        return float(np.percentile(values, tail)), float(np.percentile(values, 100.0 - tail))
+
+    def paired_difference(
+        self, name: str, reference: str, metric: str, level: float = 0.95
+    ) -> tuple[float, float, float, float]:
+        """(mean diff, low, high, share of resamples where `name` beats `reference`).
+
+        Paired: both configurations were scored on the very same resample, so
+        the variation both share (which columns happened to be drawn) cancels.
+        """
+        diff = self.samples[name][metric] - self.samples[reference][metric]
+        tail = (1.0 - level) / 2.0 * 100.0
+        return (
+            float(diff.mean()),
+            float(np.percentile(diff, tail)),
+            float(np.percentile(diff, 100.0 - tail)),
+            float((diff > 0).mean()),
+        )
+
+
+def bootstrap_compare(
+    dataset: Dataset,
+    scorers: dict[str, Scorer],
+    n_boot: int = 200,
+    frac: float = 0.8,
+    mode: str = "subsample",
+    seed: int = 0,
+) -> BootstrapResult:
+    """Score every configuration on the same resamples of the columns.
+
+    mode="subsample": draw `frac` of the columns WITHOUT replacement and re-run
+      the whole pipeline on them — reduction, blind choice of k or grid cell,
+      clustering, scoring. The demanding test: it asks whether the result
+      survives a different sample of columns, choices included. Without
+      replacement because duplicated points distort density and silhouette.
+
+    mode="fixed": cluster once on the full dataset, then draw `frac` of the
+      columns, also without replacement, and only re-score the fixed
+      partitions. It measures how much of a score is which columns got
+      labelled, holding the pipeline still. A first version drew WITH
+      replacement; duplicated columns inflate ARI and AMI (the document's AMI
+      interval did not even contain its own point estimate), so both modes
+      subsample.
+
+    Every configuration sees the same draws, so differences are paired.
+    """
+    if mode not in ("subsample", "fixed"):
+        raise ValueError(f"mode must be 'subsample' or 'fixed', got {mode!r}")
+    if not 0.0 < frac <= 1.0:
+        raise ValueError("frac must be in (0, 1]")
+    rng = np.random.default_rng(seed)
+    n = dataset.n_columns
+    size = max(2, round(frac * n))
+    point = {name: scorer(dataset) for name, scorer in scorers.items()}
+    samples = {name: {m: np.empty(n_boot) for m in BOOTSTRAP_METRICS} for name in scorers}
+
+    if mode == "subsample":
+        for b in range(n_boot):
+            sub = dataset.subset(np.sort(rng.choice(n, size=size, replace=False)))
+            for name, scorer in scorers.items():
+                for metric, value in scorer(sub).items():
+                    samples[name][metric][b] = value
+    else:
+        partitions = {name: _fixed_partition(dataset, scorer) for name, scorer in scorers.items()}
+        truth = np.asarray(dataset.truth)
+        tables = np.asarray(dataset.table_of)
+        for b in range(n_boot):
+            idx = np.sort(rng.choice(n, size=size, replace=False))
+            for name, labels in partitions.items():
+                ids = labels[idx]
+                # Only the partition metrics are kept, so the predicted labels
+                # passed for accuracy/F1 are a placeholder, never read back.
+                s = score(
+                    "b",
+                    list(truth[idx]),
+                    list(truth[idx]),
+                    group_ids=ids,
+                    table_of=list(tables[idx]),
+                )
+                for metric, value in _metrics(s).items():
+                    samples[name][metric][b] = value
+    return BootstrapResult(mode, n_boot, frac, point, samples)
+
+
+def _fixed_partition(dataset: Dataset, scorer: Scorer) -> np.ndarray:
+    """The partition a blind scorer produces on the full dataset.
+
+    Only single-run scorers have one partition; the mean over wordings is a
+    mean of three partitions and has no fixed one to re-score.
+    """
+    partition = getattr(scorer, "partition", None)
+    if partition is None:
+        raise ValueError("mode='fixed' needs scorers built with fixed_partition_scorer")
+    return np.asarray(partition(dataset))
+
+
+def fixed_partition_scorer(
+    weights: dict[str, float], algorithm: str = "ward", wording: str | None = None
+) -> Scorer:
+    """`blind_scorer` that can also hand back its partition, for mode='fixed'."""
+    scorer = blind_scorer(weights, algorithm, wording)
+
+    def partition(dataset: Dataset) -> list[int]:
+        if wording is not None:
+            dataset = dataset.with_conflict(dataset.e_conflict_variants[wording])
+        return evaluate_blind("b", dataset, weights, algorithm=algorithm).evaluation.cluster_ids
+
+    scorer.partition = partition  # type: ignore[attr-defined]
+    return scorer
+
+
+BOOTSTRAP_COLUMNS = [
+    Column("Configuration", 30, "<"),
+    Column("ARI", 8),
+    Column("ARI 95% CI", 17),
+    Column("AMI", 8),
+    Column("AMI 95% CI", 17),
+    Column("ARI~tbl", 8),
+]
+
+DIFF_COLUMNS = [
+    Column("Comparison", 44, "<"),
+    Column("metric", 7, "<"),
+    Column("diff", 8),
+    Column("95% CI", 17),
+    Column("wins", 6),
+]
+
+
+def format_bootstrap(result: BootstrapResult, reference: str) -> str:
+    """Point estimates with their intervals, then every config paired against `reference`."""
+    rows = []
+    for name, point in result.point.items():
+        ari_lo, ari_hi = result.interval(name, "ari")
+        ami_lo, ami_hi = result.interval(name, "ami")
+        rows.append(
+            [
+                name,
+                f"{point['ari']:.4f}",
+                f"[{ari_lo:.3f}, {ari_hi:.3f}]",
+                f"{point['ami']:.4f}",
+                f"[{ami_lo:.3f}, {ami_hi:.3f}]",
+                _fmt_table_ari(point["table_ari"]),
+            ]
+        )
+    diffs = []
+    for name in result.point:
+        if name == reference:
+            continue
+        for metric in ("ari", "ami"):
+            mean, lo, hi, wins = result.paired_difference(name, reference, metric)
+            diffs.append(
+                [
+                    f"{name} - {reference}",
+                    metric.upper(),
+                    f"{mean:+.4f}",
+                    f"[{lo:+.3f}, {hi:+.3f}]",
+                    f"{wins:.0%}",
+                ]
+            )
+    what = (
+        f"re-running the whole pipeline on {result.frac:.0%} of the columns"
+        if result.mode == "subsample"
+        else f"re-scoring fixed partitions on {result.frac:.0%} of the columns"
+    )
+    lines = [
+        f"Bootstrap, {result.n_boot} resamples, {what}.",
+        "Point estimates are on the full dataset; intervals are percentile 95%.",
+        render_table(BOOTSTRAP_COLUMNS, rows),
+        "",
+        "Paired differences (same resamples for every configuration):",
+        render_table(DIFF_COLUMNS, diffs),
+        "",
+        "A difference is real at 95% when its interval excludes zero. 'wins' is the",
+        "share of resamples in which the configuration beat the reference.",
+    ]
+    return "\n".join(lines)
 
 
 def evaluate_late_fusion(

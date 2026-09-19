@@ -36,6 +36,9 @@ entrypoint shebangs are stale.
     --ablation output/intermediate_02.pkl output/intermediate_docs.pkl
 .venv/bin/python -m db_bad_clust.cli experiment --without-giants \
     --pickle output/intermediate_docs.pkl --conflict --robustness
+# 95% intervals and paired differences (~0.8 s per resample)
+.venv/bin/python -m db_bad_clust.cli experiment --without-giants \
+    --pickle output/intermediate_docs.pkl --bootstrap 500
 
 # Rebuild the feature blocks from live Oracle metadata. Needs the container up.
 .venv/bin/python scripts/apply_comments.py            # once: puts comments in the DB
@@ -44,7 +47,7 @@ entrypoint shebangs are stale.
 ```
 
 ```bash
-.venv/bin/python -m pytest tests/ -v      # 507 tests, no DB required
+.venv/bin/python -m pytest tests/ -v      # 520 tests, no DB required
 .venv/bin/python -m ruff check src tests scripts   # lint-clean
 ```
 
@@ -115,10 +118,14 @@ clustering is Ward with k chosen by silhouette. Everything is chosen blind. On 1
 | **conflict, mean of 3 wordings**  | 0.1256 | 0.2004 |        0.002 |
 | conflict, default wording         | 0.1693 | 0.2464 |        0.006 |
 
-ARI doubles, and AMI does not improve cleanly: the document's AMI comes from recognising tables.
-The 0.1107 quoted above for the document was picked by looking at the labels (`min_samples=3`).
-On the full corpus, the default wording beats the document on ARI (0.4185 against 0.366–0.386)
-with a third of its table leakage, but not on AMI. See `docs/research_improving_clustering.md`,
+A paired bootstrap (500 subsamples of 80% of the columns, whole blind pipeline re-run each
+time) settles what is real. Without the giants, the ARI gain of the mean over wordings is
+**+0.073 [95% CI +0.042, +0.106]**, winning in 100% of resamples; the AMI difference is a tie,
+[-0.053, +0.061]. On the full corpus the document is **better** in AMI by about 0.07 (interval
+excludes zero) and ties in ARI, because it recognises the two giant tables. So the claim is: on
+the columns a per-column method can see, the conflict representation groups by anti-pattern
+better than the document, without table leakage. The 0.1107 quoted above for the document was
+picked by looking at the labels (`min_samples=3`). See `docs/research_improving_clustering.md`,
 candidatos #6 and #7.
 
 ## Invariants

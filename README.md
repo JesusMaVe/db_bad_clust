@@ -48,8 +48,10 @@ elegido por silueta sin mirar etiquetas. En las mismas 153 columnas:
 | **conflicto, media de 3 fraseos** | 0.1256 | 0.2004 |               0.002 |
 | conflicto, fraseo por defecto     | 0.1693 | 0.2464 |               0.006 |
 
-El ARI se duplica. El AMI no mejora de forma limpia, porque el del documento viene de reconocer
-tablas. La cifra a citar es la media sobre fraseos: el fraseo por defecto se eligió mirando el ARI.
+Con un bootstrap pareado de 500 submuestras, la mejora en ARI de la media es +0.073, con intervalo
+de confianza al 95 % de +0.042 a +0.106. En AMI hay empate. En el corpus completo el documento es
+mejor en AMI, porque reconoce las dos tablas gigantes. La cifra a citar es la media sobre fraseos:
+el fraseo por defecto se eligió mirando el ARI.
 
 ```bash
 .venv/bin/python -m db_bad_clust.cli experiment --without-giants \
@@ -114,7 +116,7 @@ sobre las 243 etiquetas, no reglas — ver AGENTS.md):
 ```
 
 ```bash
-.venv/bin/python -m pytest tests/ -v       # 507 tests, sin BD ni descarga del modelo
+.venv/bin/python -m pytest tests/ -v       # 520 tests, sin BD ni descarga del modelo
 ```
 
 `AGENTS.md` tiene el detalle completo: invariantes, ablaciones y limitaciones medidas.

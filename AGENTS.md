@@ -28,6 +28,9 @@ Usa `.venv/bin/python -m <cmd>` — los shebangs del venv están obsoletos (la c
 # La representación de conflicto, todo elegido a ciegas, y su robustez ante el fraseo de las anclas
 .venv/bin/python -m db_bad_clust.cli experiment --without-giants \
     --pickle output/intermediate_docs.pkl --conflict --robustness
+# Intervalos de confianza al 95 % y diferencias pareadas (~0.8 s por remuestreo)
+.venv/bin/python -m db_bad_clust.cli experiment --without-giants \
+    --pickle output/intermediate_docs.pkl --bootstrap 500
 # La rejilla completa de HDBSCAN con la celda elegida por validez
 .venv/bin/python -m db_bad_clust.cli experiment --without-giants \
     --pickle output/intermediate_docs.pkl --stability
@@ -208,9 +211,14 @@ el 0.5031 de α=0 no es lo que parece.
   cercana, con el margen como confianza, y no colapsa con ningún fraseo. Votar o promediar entre
   fraseos o encoders reintroduce el colapso. Sin gigantes, fusionado, Ward con k por silueta:
   media de 3 fraseos ARI 0.1256 / AMI 0.2004 / ARI~tbl 0.002, con el fraseo por defecto 0.1693 /
-  0.2464. El documento, igual de ciego, da 0.0505 / 0.2105 / 0.867. **El ARI se duplica; el AMI no
-  mejora de forma limpia.** Reporta la media sobre fraseos: el fraseo por defecto se eligió mirando
-  el ARI.
+  0.2464. El documento, igual de ciego, da 0.0505 / 0.2105 / 0.867. Bootstrap pareado (500
+  submuestras del 80 %, pipeline ciego completo en cada una): **ARI +0.073 [IC 95 % +0.042,
+  +0.106], gana el 100 %; AMI empata, [-0.053, +0.061].** En el corpus completo el documento es
+  mejor en AMI por ~0.07 (el intervalo excluye el cero) y empata en ARI. Reporta la media sobre
+  fraseos: el fraseo por defecto se eligió mirando el ARI.
+
+- **Una diferencia se afirma solo con su intervalo pareado** (`--bootstrap N`). Ambos modos
+  submuestrean sin reemplazo: con reemplazo, las columnas duplicadas inflan ARI y AMI.
 
 - **Elige hiperparámetros a ciegas y reporta ARI~tbl.** `min_samples=3` (candidato #1) se eligió
   mirando el ARI contra las etiquetas. Con elección ciega el documento sin gigantes da ARI 0.0478,
@@ -224,7 +232,7 @@ el 0.5031 de α=0 no es lo que parece.
 ## Tests y lint
 
 ```bash
-.venv/bin/python -m pytest tests/ -v      # 507 tests, sin BD y sin descargar el modelo
+.venv/bin/python -m pytest tests/ -v      # 520 tests, sin BD y sin descargar el modelo
 .venv/bin/python -m ruff check src tests scripts   # lint-clean
 ```
 

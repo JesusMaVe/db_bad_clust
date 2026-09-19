@@ -31,15 +31,19 @@ def _experiment(args: argparse.Namespace) -> int:
         GIANT_TABLES,
         STRUCTURE_ONLY,
         ablation,
+        blind_scorer,
+        bootstrap_compare,
         cluster_composition,
         evaluate,
         evaluate_blind,
         format_blind_table,
+        format_bootstrap,
         format_diagnostics,
         format_robustness,
         format_stability,
         format_table,
         load_dataset,
+        mean_over_wordings_scorer,
         robustness_over_wordings,
         stability_sweep,
         sweep,
@@ -84,7 +88,7 @@ def _experiment(args: argparse.Namespace) -> int:
             )
         )
 
-    if args.conflict or args.stability or args.robustness:
+    if args.conflict or args.stability or args.robustness or args.bootstrap:
         if dataset.e_conflict is None:
             print(
                 f"error: {args.pickle} carries no 'e_conflict' block — rebuild it with "
@@ -93,7 +97,7 @@ def _experiment(args: argparse.Namespace) -> int:
             )
             return 1
 
-    if args.robustness and not dataset.e_conflict_variants:
+    if (args.robustness or args.bootstrap) and not dataset.e_conflict_variants:
         print(
             f"error: {args.pickle} carries no 'e_conflict_variants' — rebuild it with "
             "scripts/build_embeddings.py (--from-pickle works without Oracle)",
@@ -128,6 +132,19 @@ def _experiment(args: argparse.Namespace) -> int:
             print()
             print(f"Robustness over anchor wordings — conflict fused / {algorithm}")
             print(format_robustness(robustness_over_wordings(dataset, CONFLICT_FUSED, algorithm)))
+
+    if args.bootstrap:
+        print()
+        scorers = {
+            "document / ward": blind_scorer(weights_for(1.0), "ward"),
+            "conflict default / ward": blind_scorer(CONFLICT_FUSED, "ward", "orig"),
+            "conflict mean / ward": mean_over_wordings_scorer(CONFLICT_FUSED, "ward"),
+            "conflict mean / hdbscan": mean_over_wordings_scorer(CONFLICT_FUSED, "hdbscan"),
+        }
+        result = bootstrap_compare(
+            dataset, scorers, n_boot=args.bootstrap, frac=args.bootstrap_frac, seed=0
+        )
+        print(format_bootstrap(result, "document / ward"))
 
     if args.stability:
         print()
@@ -240,6 +257,20 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="re-run the blind conflict evaluation once per anchor wording and report "
         "the mean — the number to quote",
+    )
+    experiment.add_argument(
+        "--bootstrap",
+        type=int,
+        default=0,
+        metavar="N",
+        help="paired bootstrap: re-run the blind pipeline on N subsamples of the columns "
+        "and report 95%% intervals for every configuration and its difference to the document",
+    )
+    experiment.add_argument(
+        "--bootstrap-frac",
+        type=float,
+        default=0.8,
+        help="share of columns in each bootstrap subsample (default 0.8)",
     )
     experiment.add_argument(
         "--stability",

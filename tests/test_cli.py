@@ -225,3 +225,12 @@ class TestConflictFlags:
             main(["experiment", "--pickle", str(bare), "--labels", labels_path, "--conflict"]) == 1
         )
         assert "from-pickle" in capsys.readouterr().err
+
+    def test_bootstrap_prints_intervals_and_paired_differences(self, fixture_paths, capsys):
+        pickle_path, labels_path = fixture_paths
+        args = ["experiment", "--pickle", pickle_path, "--labels", labels_path]
+        assert main([*args, "--bootstrap", "3", "--bootstrap-frac", "0.6"]) == 0
+        out = capsys.readouterr().out
+        assert "Bootstrap, 3 resamples" in out
+        assert "95% CI" in out
+        assert "conflict mean / ward - document / ward" in out

@@ -633,6 +633,65 @@ El cuello de botella que queda es el **lector**. La lectura zero-shot de un nomb
 es ruidosa: los tres fraseos coinciden en la familia de una columna el 58–67 % de las veces. Cada
 palanca que intentó darle más contexto o más votos empeoró el resultado.
 
+
+#### Intervalos de confianza (2026-09-19): qué diferencias son reales
+
+Con 153 columnas, una diferencia de 0.02 a 0.04 puede ser ruido. `bootstrap_compare`
+(`cli experiment --bootstrap N`) puntúa cada configuración sobre los **mismos** remuestreos, así que
+las diferencias son pareadas. Tiene dos modos, y los dos toman el 80 % de las columnas sin
+reemplazo:
+
+- **subsample**: vuelve a correr todo el pipeline en cada remuestreo, incluida la elección ciega de
+  k o de la celda. Es la prueba exigente. Se usaron 500 remuestreos.
+- **fixed**: agrupa una vez con todas las columnas y solo re-puntúa esas particiones fijas sobre
+  cada remuestreo. Se usaron 2000 remuestreos.
+
+Una primera versión del modo fixed muestreaba **con** reemplazo. Las columnas duplicadas inflan ARI
+y AMI: el intervalo de AMI del documento, 0.215 a 0.343, ni siquiera contenía su propia estimación
+puntual de 0.2105. Se corrigió antes de reportar nada. Un test fija que, con el 100 % de las
+columnas, el modo fixed reproduce exactamente la estimación puntual.
+
+**Sin gigantes, modo subsample** (500 remuestreos, diferencia contra documento / Ward):
+
+| configuración               |    ARI [IC 95 %]      |    AMI [IC 95 %]      | Δ ARI [IC 95 %]        | gana | Δ AMI [IC 95 %]         | gana |
+| --------------------------- | --------------------- | --------------------- | ---------------------- | ---: | ----------------------- | ---: |
+| documento / Ward            | 0.051 [0.034, 0.068]  | 0.211 [0.155, 0.234]  | —                      |    — | —                       |    — |
+| documento / HDBSCAN         | 0.045 [-0.001, 0.088] | 0.150 [0.068, 0.256]  | -0.003 [-0.047, +0.035] |  47 % | -0.036 [-0.129, +0.052] |  21 % |
+| conflicto `orig` / Ward     | 0.169 [0.125, 0.202]  | 0.246 [0.195, 0.284]  | +0.112 [+0.069, +0.154] | 100 % | +0.041 [-0.025, +0.108] |  90 % |
+| **conflicto media / Ward**  | 0.126 [0.098, 0.148]  | 0.200 [0.166, 0.233]  | **+0.073 [+0.042, +0.106]** | 100 % | +0.003 [-0.053, +0.061] | 53 % |
+| conflicto media / HDBSCAN   | 0.129 [0.087, 0.153]  | 0.165 [0.126, 0.201]  | +0.069 [+0.033, +0.108] | 100 % | -0.036 [-0.091, +0.024] |  11 % |
+
+**Sin gigantes, modo fixed, cada fraseo por separado:** los tres superan al documento en ARI con un
+intervalo que excluye el cero. `orig` gana por +0.119 [+0.083, +0.158], `W2` por +0.045
+[+0.017, +0.072] y `W3` por +0.061 [+0.030, +0.093]. En AMI, los tres intervalos incluyen el cero.
+
+**Corpus completo, modo subsample:**
+
+| configuración               | Δ ARI [IC 95 %]          | gana | Δ AMI [IC 95 %]           | gana |
+| --------------------------- | ------------------------ | ---: | ------------------------- | ---: |
+| conflicto `orig` / Ward     | +0.056 [+0.002, +0.123]  |  98 % | -0.076 [-0.137, -0.009]  |   1 % |
+| conflicto media / Ward      | -0.010 [-0.059, +0.024]  |  32 % | -0.074 [-0.133, -0.027]  |   0 % |
+| conflicto media / HDBSCAN   | -0.127 [-0.181, -0.074]  |   0 % | -0.098 [-0.145, -0.050]  |   0 % |
+
+En el modo fixed, sobre el corpus completo, `W3` pierde en ARI por -0.059 [-0.085, -0.030]. Los
+tres fraseos pierden en AMI por entre -0.07 y -0.08, con intervalos que excluyen el cero.
+
+#### Qué se puede afirmar y qué no
+
+- **Afirmable:** sin las tablas gigantes, la representación de conflicto con Ward mejora el ARI
+  sobre el documento. La mejora sobrevive a remuestrear las columnas con el pipeline completo,
+  elección ciega incluida, y a cambiar la redacción de las anclas. La estimación es +0.073, con
+  intervalo [+0.042, +0.106], y gana en el 100 % de los remuestreos.
+- **Afirmable:** el conflicto elimina la fuga de tabla. Su ARI~tbl es cercano a 0, contra 0.87 del
+  documento.
+- **No afirmable:** que mejore el AMI sin gigantes. Es un empate, [-0.053, +0.061].
+- **No afirmable, y lo contrario es cierto:** que iguale al documento en el corpus completo. Ahí el
+  documento es mejor en AMI por unos 0.07, con intervalo que excluye el cero, y empata en ARI con la
+  media. La ventaja de `orig` en ARI es marginal: su intervalo empieza en +0.002. El documento gana
+  en el corpus completo reconociendo las dos tablas gigantes, con ARI~tbl 0.96.
+- **Ward frente a HDBSCAN para el documento:** no hay diferencia. Para el conflicto, Ward es igual
+  sin gigantes y claramente mejor con el corpus completo.
+
 ---
 
 ## Referencias

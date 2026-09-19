@@ -673,3 +673,129 @@ class TestRobustness:
                 e_conflict=ds.e_conflict,
                 e_conflict_variants={"orig": ds.e_conflict[:3]},
             )
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Bootstrap
+# ═══════════════════════════════════════════════════════════════════════
+
+from db_bad_clust.evaluation.experiments import (  # noqa: E402
+    BootstrapResult,
+    blind_scorer,
+    bootstrap_compare,
+    fixed_partition_scorer,
+    format_bootstrap,
+    mean_over_wordings_scorer,
+)
+
+
+def _constant_scorer(value: float):
+    def run(dataset):
+        return {"ari": value, "ami": value, "table_ari": 0.0}
+
+    return run
+
+
+class TestSubset:
+    def test_keeps_the_rows_in_order_including_repeats(self):
+        ds = _conflict_dataset()
+        sub = ds.subset([3, 1, 1])
+        assert sub.column_index == [ds.column_index[3], ds.column_index[1], ds.column_index[1]]
+        assert np.array_equal(sub.e_conflict, ds.e_conflict[[3, 1, 1]])
+
+    def test_without_tables_is_a_subset(self):
+        ds = _conflict_dataset()
+        assert ds.without_tables({"T0"}).column_index == ds.subset(range(20, 40)).column_index
+
+
+class TestBootstrapCompare:
+    def test_subsample_scores_every_config_on_every_resample(self):
+        ds = _conflict_dataset()
+        result = bootstrap_compare(
+            ds, {"a": _constant_scorer(0.5), "b": _constant_scorer(0.2)}, n_boot=5, frac=0.5
+        )
+        assert result.samples["a"]["ari"].shape == (5,)
+        assert result.point["a"]["ari"] == 0.5
+
+    def test_subsample_draws_the_requested_fraction_without_repeats(self):
+        seen = []
+
+        def spy(dataset):
+            seen.append(list(dataset.column_index))
+            return {"ari": 0.0, "ami": 0.0, "table_ari": 0.0}
+
+        ds = _conflict_dataset()
+        bootstrap_compare(ds, {"s": spy}, n_boot=3, frac=0.5)
+        drawn = seen[1:]  # the first call is the point estimate on the full data
+        assert all(len(d) == 20 and len(set(d)) == 20 for d in drawn)
+
+    def test_paired_difference_of_constant_scorers_is_exact(self):
+        ds = _conflict_dataset()
+        result = bootstrap_compare(
+            ds, {"a": _constant_scorer(0.5), "b": _constant_scorer(0.2)}, n_boot=4, frac=0.5
+        )
+        mean, lo, hi, wins = result.paired_difference("a", "b", "ari")
+        assert mean == pytest.approx(0.3)
+        assert lo == pytest.approx(0.3) and hi == pytest.approx(0.3)
+        assert wins == 1.0
+
+    def test_is_reproducible_under_a_seed(self):
+        ds = _conflict_dataset()
+        scorers = {"w": blind_scorer(CONFLICT, "ward")}
+        a = bootstrap_compare(ds, scorers, n_boot=3, frac=0.7, seed=1)
+        b = bootstrap_compare(ds, scorers, n_boot=3, frac=0.7, seed=1)
+        assert np.array_equal(a.samples["w"]["ari"], b.samples["w"]["ari"])
+
+    def test_fixed_mode_rescores_one_partition(self):
+        ds = _conflict_dataset()
+        result = bootstrap_compare(
+            ds, {"w": fixed_partition_scorer(CONFLICT, "ward")}, n_boot=20, mode="fixed", frac=0.8
+        )
+        low, high = result.interval("w", "ari")
+        assert -1.0 <= low <= high <= 1.0
+        assert result.mode == "fixed"
+        # re-scoring one fixed partition on subsampled columns centres on its full-data score
+        assert abs(np.median(result.samples["w"]["ari"]) - result.point["w"]["ari"]) < 0.1
+
+    def test_fixed_mode_on_every_column_reproduces_the_point_estimate(self):
+        """No duplicates and no dropped columns: the re-score is the score."""
+        ds = _conflict_dataset()
+        result = bootstrap_compare(
+            ds, {"w": fixed_partition_scorer(CONFLICT, "ward")}, n_boot=3, mode="fixed", frac=1.0
+        )
+        for metric in ("ari", "ami"):
+            assert np.allclose(result.samples["w"][metric], result.point["w"][metric])
+
+    def test_fixed_mode_refuses_scorers_without_a_partition(self):
+        with pytest.raises(ValueError):
+            bootstrap_compare(
+                _conflict_dataset(), {"a": _constant_scorer(0.1)}, n_boot=2, mode="fixed"
+            )
+
+    def test_rejects_bad_mode_and_fraction(self):
+        ds = _conflict_dataset()
+        with pytest.raises(ValueError):
+            bootstrap_compare(ds, {"a": _constant_scorer(0.1)}, mode="jackknife")
+        with pytest.raises(ValueError):
+            bootstrap_compare(ds, {"a": _constant_scorer(0.1)}, frac=0.0)
+
+    def test_mean_over_wordings_averages_the_three_runs(self):
+        ds = _with_variants(_conflict_dataset())
+        mean = mean_over_wordings_scorer(CONFLICT, "ward")(ds)
+        each = [blind_scorer(CONFLICT, "ward", w)(ds)["ari"] for w in ("orig", "W2", "W3")]
+        assert mean["ari"] == pytest.approx(np.mean(each))
+
+    def test_wording_scorer_refuses_a_missing_variant(self):
+        with pytest.raises(ValueError):
+            blind_scorer(CONFLICT, "ward", "W9")(_with_variants(_conflict_dataset()))
+
+    def test_format_reports_intervals_and_paired_wins(self):
+        ds = _conflict_dataset()
+        result = bootstrap_compare(
+            ds, {"ref": _constant_scorer(0.1), "new": _constant_scorer(0.3)}, n_boot=3, frac=0.5
+        )
+        out = format_bootstrap(result, "ref")
+        assert "95% CI" in out
+        assert "new - ref" in out
+        assert "100%" in out
+        assert isinstance(result, BootstrapResult)
